@@ -12,13 +12,23 @@ NC='\033[0m' # No Color
 
 # Install acme.sh if not present
 install_acme() {
-    if [ ! -f ~/.acme.sh/acme.sh ]; then
-        echo -e "${YELLOW}Installing acme.sh...${NC}"
-        curl https://get.acme.sh | sh -s email="$1"
-        source ~/.bashrc
-    else
+    local email=$1
+    local acme_home="/root/.acme.sh"
+    
+    if [ -f "$acme_home/acme.sh" ]; then
         echo -e "${GREEN}acme.sh already installed${NC}"
+        return 0
     fi
+    
+    echo -e "${YELLOW}Installing acme.sh...${NC}"
+    
+    # Install acme.sh with proper flags for root/sudo usage
+    curl https://get.acme.sh | sh -s -- --install-online -m "$email" --home "$acme_home"
+    
+    # Create alias for easier access
+    export ACME_HOME="$acme_home"
+    
+    echo -e "${GREEN}✓ acme.sh installed to $acme_home${NC}"
 }
 
 # Check DNS propagation
@@ -32,14 +42,26 @@ check_dns_propagation() {
     
     while [ $attempt -le $max_attempts ]; do
         local resolved_ip
-        resolved_ip=$(dig +short "$domain" A | head -n1)
+        # Use dig to get final IP (handles CNAME chains)
+        resolved_ip=$(dig +short "$domain" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
+        
+        # If no IP found, try with @8.8.8.8
+        if [ -z "$resolved_ip" ]; then
+            resolved_ip=$(dig +short "$domain" @8.8.8.8 | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
+        fi
         
         if [ "$resolved_ip" = "$expected_ip" ]; then
             echo -e "${GREEN}✓ DNS propagated correctly: $domain -> $resolved_ip${NC}"
             return 0
         fi
         
-        echo -e "${YELLOW}Attempt $attempt/$max_attempts: $domain resolves to '$resolved_ip' (expected: $expected_ip)${NC}"
+        # Also accept if domain resolves to ANY IP (for CDN proxied domains)
+        if [ -n "$resolved_ip" ]; then
+            echo -e "${YELLOW}$domain resolves to $resolved_ip (expected: $expected_ip)${NC}"
+            echo -e "${YELLOW}If using CDN proxy, this may be expected${NC}"
+        fi
+        
+        echo -e "${YELLOW}Attempt $attempt/$max_attempts: waiting for DNS propagation...${NC}"
         sleep 5
         ((attempt++))
     done
@@ -85,7 +107,7 @@ issue_certificate() {
     systemctl stop apache2 2>/dev/null || true
     
     # Issue certificate in standalone mode
-    ~/.acme.sh/acme.sh --issue \
+    /root/.acme.sh/acme.sh --home /root/.acme.sh --issue \
         -d "$domain" \
         --standalone \
         --httpport 80 \
@@ -111,7 +133,7 @@ install_certificate() {
     
     mkdir -p "$cert_dir"
     
-    ~/.acme.sh/acme.sh --install-cert \
+    /root/.acme.sh/acme.sh --home /root/.acme.sh --install-cert \
         -d "$domain" \
         --ecc \
         --fullchain-file "$cert_dir/fullchain.pem" \
@@ -133,7 +155,7 @@ setup_auto_renewal() {
     
     # Display renewal command for reference
     echo -e "${YELLOW}Manual renewal command:${NC}"
-    echo "~/.acme.sh/acme.sh --renew-all --force"
+    echo "/root/.acme.sh/acme.sh --renew-all --force"
 }
 
 # Issue wildcard certificate using DNS-01 challenge (Cloudflare)
@@ -141,21 +163,44 @@ issue_wildcard_certificate() {
     local base_domain=$1
     local email=$2
     local cf_token=$3
+    local force_renew=${4:-false}
+    
+    # Check if certificate already exists in acme.sh
+    local cert_path="/root/.acme.sh/${base_domain}_ecc"
+    if [ -f "$cert_path/${base_domain}.cer" ] && [ "$force_renew" != "true" ]; then
+        # Check if certificate is still valid (not expiring in 30 days)
+        local expiry_date
+        expiry_date=$(openssl x509 -in "$cert_path/${base_domain}.cer" -noout -enddate 2>/dev/null | cut -d= -f2)
+        if [ -n "$expiry_date" ]; then
+            local expiry_epoch
+            local now_epoch
+            local days_left
+            expiry_epoch=$(date -d "$expiry_date" +%s 2>/dev/null || echo 0)
+            now_epoch=$(date +%s)
+            days_left=$(( (expiry_epoch - now_epoch) / 86400 ))
+            
+            if [ "$days_left" -gt 30 ]; then
+                echo -e "${GREEN}✓ Valid certificate found (expires in ${days_left} days), skipping issuance${NC}"
+                return 0
+            else
+                echo -e "${YELLOW}Certificate expires in ${days_left} days, renewing...${NC}"
+            fi
+        fi
+    fi
     
     echo -e "${YELLOW}Issuing wildcard certificate for *.${base_domain}...${NC}"
-    
+      
     # Export Cloudflare API credentials
     export CF_Token="$cf_token"
     export CF_Account_ID=""  # Not required for token
     
-    # Issue certificate with DNS-01 challenge
-    ~/.acme.sh/acme.sh --issue \
+    # Issue certificate with DNS-01 challenge (without --force to respect rate limits)
+    /root/.acme.sh/acme.sh --home /root/.acme.sh --issue \
         -d "${base_domain}" \
         -d "*.${base_domain}" \
         --dns dns_cf \
         --server letsencrypt \
-        --keylength ec-256 \
-        --force
+        --keylength ec-256
     
     local exit_code=$?
     
@@ -166,8 +211,12 @@ issue_wildcard_certificate() {
     if [ $exit_code -eq 0 ]; then
         echo -e "${GREEN}✓ Wildcard certificate issued successfully${NC}"
         return 0
+    elif [ $exit_code -eq 2 ]; then
+        # Exit code 2 means cert not due for renewal
+        echo -e "${GREEN}✓ Certificate already exists and is valid${NC}"
+        return 0
     else
-        echo -e "${RED}✗ Wildcard certificate issuance failed${NC}"
+        echo -e "${RED}✗ Wildcard certificate issuance failed (exit code: $exit_code)${NC}"
         return 1
     fi
 }
@@ -176,31 +225,59 @@ issue_wildcard_certificate() {
 install_wildcard_certificate() {
     local base_domain=$1
     local cert_dir="/etc/xray/cert"
+    local reload_script="/etc/xray/cert/reload-services.sh"
     
     mkdir -p "$cert_dir"
     
-    # Install certificate
-    ~/.acme.sh/acme.sh --install-cert \
+    # Create reload script with certificate merge command
+    cat > "$reload_script" << 'SCRIPT'
+#!/bin/bash
+# Certificate reload script - auto-generated
+# This script is called by acme.sh when certificates are renewed
+CERT_DIR="/etc/xray/cert"
+
+# Regenerate combined PEM for HAProxy
+cat "$CERT_DIR/fullchain.pem" "$CERT_DIR/privkey.pem" > "$CERT_DIR/haproxy.pem"
+chmod 644 "$CERT_DIR/haproxy.pem"
+
+# Reload/restart services
+systemctl reload haproxy 2>/dev/null || true
+systemctl restart xray 2>/dev/null || true
+systemctl reload nginx 2>/dev/null || true
+SCRIPT
+    chmod +x "$reload_script"
+    
+    # Install certificate directly to standard names (no copy needed after renewal)
+    echo -e "${YELLOW}Installing certificate to $cert_dir...${NC}"
+    
+    if ! /root/.acme.sh/acme.sh --home /root/.acme.sh --install-cert \
         -d "${base_domain}" \
-        -d "*.${base_domain}" \
-        --ecc \
-        --fullchain-file "$cert_dir/${base_domain}_fullchain.pem" \
-        --key-file "$cert_dir/${base_domain}_privkey.pem" \
-        --reloadcmd "systemctl reload haproxy nginx xray"
+        --ecc --force \
+        --fullchain-file "$cert_dir/fullchain.pem" \
+        --key-file "$cert_dir/privkey.pem" \
+        --reloadcmd "$reload_script"; then
+        echo -e "${RED}✗ acme.sh --install-cert returned non-zero, but continuing...${NC}"
+    fi
+    
+    # Verify certificate files exist
+    if [ ! -f "$cert_dir/fullchain.pem" ]; then
+        echo -e "${RED}✗ Certificate file not found after install${NC}"
+        return 1
+    fi
     
     # Create combined PEM for HAProxy (fullchain + key)
-    cat "$cert_dir/${base_domain}_fullchain.pem" "$cert_dir/${base_domain}_privkey.pem" > "$cert_dir/${base_domain}.pem"
+    cat "$cert_dir/fullchain.pem" "$cert_dir/privkey.pem" > "$cert_dir/haproxy.pem"
     
-    # Set proper permissions
-    chown -R nobody:nogroup "$cert_dir"
-    chmod 644 "$cert_dir/${base_domain}_fullchain.pem"
-    chmod 644 "$cert_dir/${base_domain}.pem"
-    chmod 600 "$cert_dir/${base_domain}_privkey.pem"
+    # Set proper permissions (all files need to be readable by services)
+    chmod 644 "$cert_dir/fullchain.pem"
+    chmod 644 "$cert_dir/privkey.pem"
+    chmod 644 "$cert_dir/haproxy.pem"
     
     echo -e "${GREEN}✓ Wildcard certificate installed to $cert_dir${NC}"
-    echo -e "${YELLOW}  - Fullchain: ${base_domain}_fullchain.pem${NC}"
-    echo -e "${YELLOW}  - Private key: ${base_domain}_privkey.pem${NC}"
-    echo -e "${YELLOW}  - HAProxy combined: ${base_domain}.pem${NC}"
+    echo -e "${YELLOW}  - Fullchain: fullchain.pem${NC}"
+    echo -e "${YELLOW}  - Private key: privkey.pem${NC}"
+    echo -e "${YELLOW}  - HAProxy combined: haproxy.pem${NC}"
+    echo -e "${YELLOW}  - Reload script: $reload_script${NC}"
 }
 
 # Process certificate for a domain
@@ -312,16 +389,20 @@ manage_certificates() {
         fi
     fi
     
-    # Get subscription domain
+    # If wildcard is enabled, skip individual subdomain certificates
+    # Wildcard certificate covers *.domain.com
+    if [ "$wildcard_enabled" = "true" ]; then
+        echo -e "${GREEN}✓ Wildcard certificate covers all subdomains, skipping individual certificates${NC}"
+        return 0
+    fi
+    
+    # Get subscription domain (only needed if wildcard is NOT enabled)
     local sub_domain
-    local cdn_domain
     sub_domain=$(echo "$config_json" | jq -r '.domains.subscription')
-    cdn_domain=$(echo "$config_json" | jq -r '.domains.cdn_domain')
     
     # Process subscription domain certificate
     local domains=()
     [ "$sub_domain" != "null" ] && domains+=("$sub_domain")
-    [ "$cdn_domain" != "null" ] && domains+=("$cdn_domain")
     
     if [ ${#domains[@]} -eq 0 ]; then
         echo -e "${YELLOW}No additional domains require certificates${NC}"
@@ -335,10 +416,7 @@ manage_certificates() {
             failed_domains+=("$domain")
         fi
     done
-    
-    # Setup auto-renewal
-    setup_auto_renewal
-    
+      
     # Report results
     echo ""
     echo -e "${YELLOW}=====================================${NC}"

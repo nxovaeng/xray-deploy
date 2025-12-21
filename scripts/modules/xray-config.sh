@@ -4,6 +4,9 @@
 
 set -euo pipefail
 
+# Use AUTOCONF_DIR from environment or fallback to /tmp
+AUTOCONF_DIR="${AUTOCONF_DIR:-/tmp}"
+
 # Generate UUID for VLESS
 generate_uuid() {
     if command -v uuidgen &> /dev/null; then
@@ -18,17 +21,41 @@ generate_reality_keys() {
     local keys_output
     keys_output=$(/usr/local/bin/xray x25519 2>&1)
     
-    local private_key
-    local public_key
+    local private_key=""
+    local public_key=""
     
-    # Try different parsing methods for compatibility
-    private_key=$(echo "$keys_output" | grep -i "private" | awk -F': ' '{print $2}' | tr -d ' ')
-    public_key=$(echo "$keys_output" | grep -i "public" | awk -F': ' '{print $2}' | tr -d ' ')
+    # Parse PrivateKey (works with "PrivateKey: xxx" or "Private key: xxx")
+    private_key=$(echo "$keys_output" | grep -i "private" | sed 's/^[^:]*://' | tr -d ' \r\n')
     
-    # Validate keys are not empty
-    if [ -z "$private_key" ] || [ -z "$public_key" ]; then
-        echo "ERROR: Failed to generate Reality keys" >&2
-        echo "xray x25519 output: $keys_output" >&2
+    # Try to parse PublicKey first, then fall back to "Password" field (newer xray format)
+    public_key=$(echo "$keys_output" | grep -i "public" | sed 's/^[^:]*://' | tr -d ' \r\n')
+    
+    # If no PublicKey found, try Password field (some xray versions use this for public key)
+    if [ -z "$public_key" ]; then
+        public_key=$(echo "$keys_output" | grep -i "password" | sed 's/^[^:]*://' | tr -d ' \r\n')
+    fi
+    
+    # If still no public key, try to derive it from private key
+    if [ -z "$public_key" ] && [ -n "$private_key" ]; then
+        local derived
+        derived=$(/usr/local/bin/xray x25519 -i "$private_key" 2>&1)
+        public_key=$(echo "$derived" | grep -i "public" | sed 's/^[^:]*://' | tr -d ' \r\n')
+        # Also try Password field
+        if [ -z "$public_key" ]; then
+            public_key=$(echo "$derived" | grep -i "password" | sed 's/^[^:]*://' | tr -d ' \r\n')
+        fi
+    fi
+    
+    # Validate keys
+    if [ -z "$private_key" ] || [ ${#private_key} -lt 40 ]; then
+        echo "ERROR: Failed to generate Reality private key" >&2
+        echo "ERROR: xray output: $keys_output" >&2
+        exit 1
+    fi
+    
+    if [ -z "$public_key" ] || [ ${#public_key} -lt 40 ]; then
+        echo "ERROR: Failed to generate Reality public key" >&2
+        echo "ERROR: xray output: $keys_output" >&2
         exit 1
     fi
     
@@ -55,6 +82,12 @@ create_reality_inbound() {
     private_key=$(echo "$keys" | cut -d'|' -f1)
     public_key=$(echo "$keys" | cut -d'|' -f2)
     
+    # Validate keys before proceeding
+    if [ -z "$private_key" ] || [ ${#private_key} -lt 40 ]; then
+        echo "ERROR: private_key is empty or invalid in create_reality_inbound" >&2
+        exit 1
+    fi
+    
     # Generate short IDs
     local short_id1
     local short_id2
@@ -71,8 +104,7 @@ create_reality_inbound() {
     "clients": [
       {
         "id": "$uuid",
-        "flow": "xtls-rprx-vision",
-        "email": "user@reality"
+        "flow": "xtls-rprx-vision"
       }
     ],
     "decryption": "none"
@@ -81,9 +113,7 @@ create_reality_inbound() {
     "network": "tcp",
     "security": "reality",
     "realitySettings": {
-      "show": false,
       "dest": "$dest",
-      "xver": 0,
       "serverNames": $server_names,
       "privateKey": "$private_key",
       "shortIds": ["$short_id1", "$short_id2"]
@@ -91,14 +121,15 @@ create_reality_inbound() {
   },
   "sniffing": {
     "enabled": true,
-    "destOverride": ["http", "tls", "quic"]
+    "destOverride": ["http", "tls", "quic"],
+    "routeOnly": true
   }
 }
 EOF
 
     # Store public key for client configuration
-    echo "$public_key" > /tmp/reality_public_key
-    echo "$short_id1" > /tmp/reality_short_id
+    echo "$public_key" > $AUTOCONF_DIR/reality_public_key
+    echo "$short_id1" > $AUTOCONF_DIR/reality_short_id
 }
 
 # Create Xray inbound configuration for XHTTP
@@ -119,7 +150,7 @@ create_xhttp_inbound() {
     "clients": [
       {
         "id": "$uuid",
-        "email": "user@xhttp"
+        "flow": ""
       }
     ],
     "decryption": "none"
@@ -134,16 +165,18 @@ create_xhttp_inbound() {
           "keyFile": "${cert_dir}/privkey.pem"
         }
       ],
-      "alpn": ["h2", "http/1.1"]
+      "alpn": ["h2", "http/1.1"],
+      "serverName": "$domain"
     },
     "xhttpSettings": {
       "path": "$path",
-      "host": "$domain"
+      "mode": "auto"
     }
   },
   "sniffing": {
     "enabled": true,
-    "destOverride": ["http", "tls", "quic"]
+    "destOverride": ["http", "tls", "quic"],
+    "routeOnly": true
   }
 }
 EOF
@@ -166,8 +199,7 @@ create_grpc_inbound() {
   "settings": {
     "clients": [
       {
-        "id": "$uuid",
-        "email": "user@grpc"
+        "id": "$uuid"
       }
     ],
     "decryption": "none"
@@ -192,7 +224,8 @@ create_grpc_inbound() {
   },
   "sniffing": {
     "enabled": true,
-    "destOverride": ["http", "tls", "quic"]
+    "destOverride": ["http", "tls", "quic"],
+    "routeOnly": true
   }
 }
 EOF
@@ -435,10 +468,10 @@ generate_xray_config() {
     trojan_password=$(openssl rand -base64 16)
     
     # Store UUIDs for subscription generation
-    echo "$reality_uuid" > /tmp/uuid_reality
-    echo "$xhttp_uuid" > /tmp/uuid_xhttp
-    echo "$grpc_uuid" > /tmp/uuid_grpc
-    echo "$trojan_password" > /tmp/password_trojan
+    echo "$reality_uuid" > $AUTOCONF_DIR/uuid_reality
+    echo "$xhttp_uuid" > $AUTOCONF_DIR/uuid_xhttp
+    echo "$grpc_uuid" > $AUTOCONF_DIR/uuid_grpc
+    echo "$trojan_password" > $AUTOCONF_DIR/password_trojan
     
     # Build inbounds array
     local inbounds="["
@@ -463,8 +496,8 @@ generate_xray_config() {
         local xhttp_domain
         xhttp_port=$(echo "$config_json" | jq -r '.protocols.xhttp.port')
         xhttp_path=$(echo "$config_json" | jq -r '.protocols.xhttp.path')
-        # Read from temp file (generated by haproxy-config.sh) or fallback to wildcard_base
-        xhttp_domain=$(cat /tmp/random_subdomain_xhttp 2>/dev/null || echo "")
+        # Read from haproxy_env (generated by haproxy-config.sh) or fallback to wildcard_base
+        xhttp_domain=$(grep "^XHTTP_DOMAIN=" $AUTOCONF_DIR/haproxy_env 2>/dev/null | cut -d= -f2 || echo "")
         [ -z "$xhttp_domain" ] && xhttp_domain=$(echo "$config_json" | jq -r '.domains.wildcard_base // "xhttp.example.com"')
         
         [ "$first" = false ] && inbounds+=","
@@ -478,8 +511,8 @@ generate_xray_config() {
         local grpc_domain
         grpc_port=$(echo "$config_json" | jq -r '.protocols.grpc.port')
         grpc_service=$(echo "$config_json" | jq -r '.protocols.grpc.service_name')
-        # Read from temp file (generated by haproxy-config.sh) or fallback to wildcard_base
-        grpc_domain=$(cat /tmp/random_subdomain_grpc 2>/dev/null || echo "")
+        # Read from haproxy_env (generated by haproxy-config.sh) or fallback to wildcard_base
+        grpc_domain=$(grep "^GRPC_DOMAIN=" $AUTOCONF_DIR/haproxy_env 2>/dev/null | cut -d= -f2 || echo "")
         [ -z "$grpc_domain" ] && grpc_domain=$(echo "$config_json" | jq -r '.domains.wildcard_base // "grpc.example.com"')
         
         [ "$first" = false ] && inbounds+=","
@@ -491,8 +524,8 @@ generate_xray_config() {
         local trojan_port
         local trojan_domain
         trojan_port=$(echo "$config_json" | jq -r '.protocols.trojan.port')
-        # Read from temp file (generated by haproxy-config.sh) or fallback to wildcard_base
-        trojan_domain=$(cat /tmp/random_subdomain_trojan 2>/dev/null || echo "")
+        # Read from haproxy_env (generated by haproxy-config.sh) or fallback to wildcard_base
+        trojan_domain=$(grep "^TROJAN_DOMAIN=" $AUTOCONF_DIR/haproxy_env 2>/dev/null | cut -d= -f2 || echo "")
         [ -z "$trojan_domain" ] && trojan_domain=$(echo "$config_json" | jq -r '.domains.wildcard_base // "trojan.example.com"')
         
         [ "$first" = false ] && inbounds+=","

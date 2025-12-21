@@ -28,7 +28,7 @@
     "xhttp": {
       "enabled": true,
       "port": 8443,
-      "path": "/api/v2/download",
+      "path": "/download",
       "cdn_compatible": true
     },
     "grpc": {

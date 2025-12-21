@@ -3,6 +3,9 @@
 
 set -euo pipefail
 
+# Use AUTOCONF_DIR from environment or fallback to /tmp
+AUTOCONF_DIR="${AUTOCONF_DIR:-/tmp}"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -108,7 +111,7 @@ setup_wgcf_config() {
     fi
     
     # Save to temporary file for Xray configuration
-    cat > /tmp/warp_config <<EOF
+    cat > $AUTOCONF_DIR/warp_config <<EOF
 {
   "private_key": "$private_key",
   "address_v4": "$address_v4",
@@ -125,7 +128,7 @@ EOF
     echo "  - IPv4: $address_v4"
     echo "  - IPv6: $address_v6"
     echo "  - Endpoint: $endpoint"
-    echo "  - Config: /tmp/warp_config"
+    echo "  - Config: $AUTOCONF_DIR/warp_config"
     
     return 0
 }
@@ -134,7 +137,7 @@ EOF
 update_xray_warp_config() {
     local xray_config="/usr/local/etc/xray/config.json"
     
-    if [ ! -f "/tmp/warp_config" ]; then
+    if [ ! -f "$AUTOCONF_DIR/warp_config" ]; then
         echo -e "${RED}✗ WARP config not found. Run setup first.${NC}"
         return 1
     fi
@@ -147,12 +150,12 @@ update_xray_warp_config() {
     local endpoint
     local mtu
     
-    private_key=$(jq -r '.private_key' /tmp/warp_config)
-    address_v4=$(jq -r '.address_v4' /tmp/warp_config)
-    address_v6=$(jq -r '.address_v6' /tmp/warp_config)
-    public_key=$(jq -r '.public_key' /tmp/warp_config)
-    endpoint=$(jq -r '.endpoint' /tmp/warp_config)
-    mtu=$(jq -r '.mtu //1420' /tmp/warp_config)
+    private_key=$(jq -r '.private_key' $AUTOCONF_DIR/warp_config)
+    address_v4=$(jq -r '.address_v4' $AUTOCONF_DIR/warp_config)
+    address_v6=$(jq -r '.address_v6' $AUTOCONF_DIR/warp_config)
+    public_key=$(jq -r '.public_key' $AUTOCONF_DIR/warp_config)
+    endpoint=$(jq -r '.endpoint' $AUTOCONF_DIR/warp_config)
+    mtu=$(jq -r '.mtu //1420' $AUTOCONF_DIR/warp_config)
     
     echo -e "${YELLOW}Updating Xray configuration with WARP outbound...${NC}"
     
@@ -178,10 +181,10 @@ update_xray_warp_config() {
          else
            .
          end
-       )' "$xray_config" > /tmp/xray_config_new.json
+       )' "$xray_config" > $AUTOCONF_DIR/xray_config_new.json
     
     if [ $? -eq 0 ]; then
-        mv /tmp/xray_config_new.json "$xray_config"
+        mv $AUTOCONF_DIR/xray_config_new.json "$xray_config"
         echo -e "${GREEN}✓ Xray configuration updated with WARP${NC}"
         echo -e "${YELLOW}  - Private Key: [REDACTED]${NC}"
         echo "  - IPv4 Address: $address_v4"

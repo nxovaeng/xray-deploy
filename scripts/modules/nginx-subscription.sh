@@ -3,6 +3,9 @@
 
 set -euo pipefail
 
+# Use AUTOCONF_DIR from environment or fallback to /tmp
+AUTOCONF_DIR="${AUTOCONF_DIR:-/tmp}"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -67,23 +70,24 @@ generate_subscription_content() {
     echo -e "${YELLOW}Generating subscription content...${NC}"
     
     # Read UUIDs and credentials from temp files
-    local reality_uuid=$(cat /tmp/uuid_reality 2>/dev/null || echo "")
-    local xhttp_uuid=$(cat /tmp/uuid_xhttp 2>/dev/null || echo "")
-    local grpc_uuid=$(cat /tmp/uuid_grpc 2>/dev/null || echo "")
-    local trojan_password=$(cat /tmp/password_trojan 2>/dev/null || echo "")
-    local reality_pubkey=$(cat /tmp/reality_public_key 2>/dev/null || echo "")
-    local reality_short_id=$(cat /tmp/reality_short_id 2>/dev/null || echo "")
+    local reality_uuid=$(cat $AUTOCONF_DIR/uuid_reality 2>/dev/null || echo "")
+    local xhttp_uuid=$(cat $AUTOCONF_DIR/uuid_xhttp 2>/dev/null || echo "")
+    local grpc_uuid=$(cat $AUTOCONF_DIR/uuid_grpc 2>/dev/null || echo "")
+    local trojan_password=$(cat $AUTOCONF_DIR/password_trojan 2>/dev/null || echo "")
+    local reality_pubkey=$(cat $AUTOCONF_DIR/reality_public_key 2>/dev/null || echo "")
+    local reality_short_id=$(cat $AUTOCONF_DIR/reality_short_id 2>/dev/null || echo "")
     
-    # Read random subdomains if exist, or use CDN domain
+    
+    # Read domains from haproxy_env if exists, or use CDN domain
     local cdn_domain=$(echo "$config_json" | jq -r '.domains.cdn_domain // null')
-    local xhttp_domain=$(cat /tmp/random_subdomain_xhttp 2>/dev/null || echo "$cdn_domain")
-    local grpc_domain=$(cat /tmp/random_subdomain_grpc 2>/dev/null || echo "$cdn_domain")
-    local trojan_domain=$(cat /tmp/random_subdomain_trojan 2>/dev/null || echo "$cdn_domain")
+    local xhttp_domain=$(grep "^XHTTP_DOMAIN=" $AUTOCONF_DIR/haproxy_env 2>/dev/null | cut -d= -f2 || echo "$cdn_domain")
+    local grpc_domain=$(grep "^GRPC_DOMAIN=" $AUTOCONF_DIR/haproxy_env 2>/dev/null | cut -d= -f2 || echo "$cdn_domain")
+    local trojan_domain=$(grep "^TROJAN_DOMAIN=" $AUTOCONF_DIR/haproxy_env 2>/dev/null | cut -d= -f2 || echo "$cdn_domain")
     
     # Fallback to example domains if CDN not configured
-    [ "$xhttp_domain" = "null" ] && xhttp_domain="xhttp.example.com"
-    [ "$grpc_domain" = "null" ] && grpc_domain="grpc.example.com"
-    [ "$trojan_domain" = "null" ] && trojan_domain="trojan.example.com"
+    [ -z "$xhttp_domain" ] || [ "$xhttp_domain" = "null" ] && xhttp_domain="xhttp.example.com"
+    [ -z "$grpc_domain" ] || [ "$grpc_domain" = "null" ] && grpc_domain="grpc.example.com"
+    [ -z "$trojan_domain" ] || [ "$trojan_domain" = "null" ] && trojan_domain="trojan.example.com"
     
     # Generate share links
     local links=""
@@ -94,33 +98,55 @@ generate_subscription_content() {
         if [ "$reality_enabled" = "true" ]; then
             local reality_port=$(echo "$config_json" | jq -r '.protocols.reality.port')
             local reality_sni=$(echo "$config_json" | jq -r '.protocols.reality.server_names[0]')
-            links+="vless://${reality_uuid}@${server_ip}:${reality_port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${reality_sni}&fp=chrome&pbk=${reality_pubkey}&sid=${reality_short_id}&type=tcp&headerType=none#Reality-XTLS-Vision\n"
+            links+="vless://${reality_uuid}@${server_ip}:${reality_port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${reality_sni}&fp=chrome&pbk=${reality_pubkey}&sid=${reality_short_id}&type=tcp&headerType=none#Reality-Direct\n"
         fi
     fi
     
-    # XHTTP link (CDN-compatible)
+    # XHTTP links (CDN-compatible: generate both CDN and Direct variants)
     if [ -n "$xhttp_uuid" ]; then
         local xhttp_enabled=$(echo "$config_json" | jq -r '.protocols.xhttp.enabled')
         if [ "$xhttp_enabled" = "true" ]; then
             local xhttp_path=$(echo "$config_json" | jq -r '.protocols.xhttp.path')
-            links+="vless://${xhttp_uuid}@${xhttp_domain}:443?encryption=none&security=tls&sni=${xhttp_domain}&alpn=h2,http/1.1&type=xhttp&path=${xhttp_path}#XHTTP-TLS-CDN\n"
+            local xhttp_cdn=$(echo "$config_json" | jq -r '.protocols.xhttp.cdn_compatible // false')
+            
+            # Direct connection link (using random subdomain)
+            links+="vless://${xhttp_uuid}@${xhttp_domain}:443?encryption=none&security=tls&sni=${xhttp_domain}&fp=chrome&alpn=h2,http/1.1&type=xhttp&path=${xhttp_path}#XHTTP-Direct\n"
+            
+            # CDN connection link (using cdn_domain if available and cdn_compatible)
+            if [ "$xhttp_cdn" = "true" ] && [ -n "$cdn_domain" ] && [ "$cdn_domain" != "null" ]; then
+                links+="vless://${xhttp_uuid}@${cdn_domain}:443?encryption=none&security=tls&sni=${xhttp_domain}&fp=chrome&alpn=h2,http/1.1&type=xhttp&path=${xhttp_path}&host=${xhttp_domain}#XHTTP-CDN\n"
+            fi
         fi
     fi
     
-    # gRPC link (CDN-compatible)
+    # gRPC links (CDN-compatible: generate both CDN and Direct variants)
     if [ -n "$grpc_uuid" ]; then
         local grpc_enabled=$(echo "$config_json" | jq -r '.protocols.grpc.enabled')
         if [ "$grpc_enabled" = "true" ]; then
             local grpc_service=$(echo "$config_json" | jq -r '.protocols.grpc.service_name')
-            links+="vless://${grpc_uuid}@${grpc_domain}:443?encryption=none&security=tls&sni=${grpc_domain}&alpn=h2&type=grpc&serviceName=${grpc_service}#gRPC-TLS-CDN\n"
+            local grpc_cdn=$(echo "$config_json" | jq -r '.protocols.grpc.cdn_compatible // false')
+            
+            # Direct connection link
+            links+="vless://${grpc_uuid}@${grpc_domain}:443?encryption=none&security=tls&sni=${grpc_domain}&fp=chrome&alpn=h2&type=grpc&serviceName=${grpc_service}#gRPC-Direct\n"
+            
+            # CDN connection link
+            if [ "$grpc_cdn" = "true" ] && [ -n "$cdn_domain" ] && [ "$cdn_domain" != "null" ]; then
+                links+="vless://${grpc_uuid}@${cdn_domain}:443?encryption=none&security=tls&sni=${grpc_domain}&fp=chrome&alpn=h2&type=grpc&serviceName=${grpc_service}&authority=${grpc_domain}#gRPC-CDN\n"
+            fi
         fi
     fi
     
-    # Trojan link (CDN-compatible)
+    # Trojan links (generate both CDN and Direct variants)
     if [ -n "$trojan_password" ]; then
         local trojan_enabled=$(echo "$config_json" | jq -r '.protocols.trojan.enabled')
         if [ "$trojan_enabled" = "true" ]; then
-            links+="trojan://${trojan_password}@${trojan_domain}:443?security=tls&sni=${trojan_domain}&alpn=http/1.1&type=tcp#Trojan-TCP-TLS-CDN\n"
+            # Direct connection link
+            links+="trojan://${trojan_password}@${trojan_domain}:443?security=tls&sni=${trojan_domain}&fp=chrome&alpn=http/1.1&type=tcp#Trojan-Direct\n"
+            
+            # CDN connection link (if cdn_domain available)
+            if [ -n "$cdn_domain" ] && [ "$cdn_domain" != "null" ]; then
+                links+="trojan://${trojan_password}@${cdn_domain}:443?security=tls&sni=${trojan_domain}&fp=chrome&alpn=http/1.1&type=tcp&host=${trojan_domain}#Trojan-CDN\n"
+            fi
         fi
     fi
     
@@ -255,6 +281,7 @@ configure_nginx_subscription() {
     local login_user=$3
     local login_password=$4
     local stats_port=$5
+    local short_id=$6
     local cert_dir="/etc/xray/cert"
     
     echo -e "${YELLOW}Configuring Nginx for subscription...${NC}"
@@ -277,10 +304,11 @@ server {
     
     root /var/www;
     
-    # Login endpoint (requires authentication)
-    location = /login {
+    # Login endpoint (requires authentication, serves HTML)
+    location /login {
         auth_basic "Subscription Access";
         auth_basic_user_file /etc/nginx/.htpasswd;
+        default_type text/html;
         alias /var/www/html/login.html;
     }
     
@@ -293,11 +321,11 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
     
-    # Subscription paths (strict 12-character alphanumeric ShortID, no auth)
-    location ~ ^/[A-Za-z0-9]{12}/.*$ {
-        root /var/www/sub;
+    # Subscription paths (exact shortid path, no auth, plain text)
+    location /${short_id}/ {
+        alias /var/www/sub/${short_id}/;
         autoindex off;
-        add_header Content-Type text/plain;
+        default_type text/plain;
     }
     
     # All other paths return 404
@@ -352,7 +380,7 @@ setup_subscription() {
     # Generate random password if auto-generate
     if [ "$login_password" = "null" ] || [ "$login_password" = "auto-generate" ]; then
         login_password=$(openssl rand -base64 16 | tr -d '/+=' | head -c 16)
-        echo "$login_password" > /tmp/subscription_password
+        echo "$login_password" > $AUTOCONF_DIR/subscription_password
     fi
     
     echo -e "${YELLOW}=====================================${NC}"
@@ -366,7 +394,7 @@ setup_subscription() {
     # Generate ShortID
     local short_id=$(generate_short_id)
     echo -e "${GREEN}Generated ShortID: ${short_id}${NC}"
-    echo "$short_id" > /tmp/subscription_shortid
+    echo "$short_id" > $AUTOCONF_DIR/subscription_shortid
     
     # Create directory structure
     create_subscription_structure "$short_id"
@@ -378,7 +406,7 @@ setup_subscription() {
     create_login_page "$short_id" "$sub_domain"
     
     # Configure Nginx with stats proxy
-    configure_nginx_subscription "$sub_domain" "$nginx_port" "$login_user" "$login_password" "$stats_port"
+    configure_nginx_subscription "$sub_domain" "$nginx_port" "$login_user" "$login_password" "$stats_port" "$short_id"
     
     echo ""
     echo -e "${GREEN}=====================================${NC}"

@@ -4,9 +4,13 @@
 
 set -euo pipefail
 
+# Use AUTOCONF_DIR from environment or fallback to /tmp
+AUTOCONF_DIR="${AUTOCONF_DIR:-/tmp}"
+
 # Generate random subdomain (5 characters, lowercase alphanumeric)
 generate_random_subdomain() {
-    tr -dc 'a-z0-9' < /dev/urandom | head -c 5
+    # Use openssl to avoid SIGPIPE from head closing the pipe early
+    openssl rand -hex 3 | head -c 5
 }
 
 # Generate HAProxy stats password
@@ -15,9 +19,26 @@ generate_stats_password() {
 }
 
 # Create HAProxy frontend configuration
+# Arguments: frontend_port, stats_port, xhttp_enabled, grpc_enabled, trojan_enabled, sub_enabled
 create_frontend_config() {
     local frontend_port=$1
     local stats_port=$2
+    local xhttp_enabled=$3
+    local grpc_enabled=$4
+    local trojan_enabled=$5
+    local sub_enabled=$6
+    
+    local frontend_rules=""
+    
+    # Build SNI routing rules only for enabled protocols
+    [ "$xhttp_enabled" = "true" ] && frontend_rules+="
+    use_backend xhttp_backend if { req_ssl_sni -i \$XHTTP_DOMAIN }"
+    [ "$grpc_enabled" = "true" ] && frontend_rules+="
+    use_backend grpc_backend if { req_ssl_sni -i \$GRPC_DOMAIN }"
+    [ "$trojan_enabled" = "true" ] && frontend_rules+="
+    use_backend trojan_backend if { req_ssl_sni -i \$TROJAN_DOMAIN }"
+    [ "$sub_enabled" = "true" ] && frontend_rules+="
+    use_backend subscription_backend if { req_ssl_sni -i \$SUB_DOMAIN }"
     
     cat <<EOF
 frontend https_frontend
@@ -27,11 +48,7 @@ frontend https_frontend
     tcp-request inspect-delay 5s
     tcp-request content accept if { req_ssl_hello_type 1 }
     
-    # SNI-based routing (random subdomains for security)
-    use_backend xhttp_backend if { req_ssl_sni -i \$XHTTP_DOMAIN }
-    use_backend grpc_backend if { req_ssl_sni -i \$GRPC_DOMAIN }
-    use_backend trojan_backend if { req_ssl_sni -i \$TROJAN_DOMAIN }
-    use_backend subscription_backend if { req_ssl_sni -i \$SUB_DOMAIN }
+    # SNI-based routing (only for enabled protocols)${frontend_rules}
     
     # Reject unknown SNI (Reality uses separate port, not through HAProxy)
     default_backend reject_backend
@@ -48,12 +65,18 @@ EOF
 }
 
 # Create backend configurations
+# Arguments: xhttp_port, grpc_port, trojan_port, nginx_port, xhttp_enabled, grpc_enabled, trojan_enabled, sub_enabled
 create_backends_config() {
     local xhttp_port=$1
     local grpc_port=$2
     local trojan_port=$3
     local nginx_port=$4
+    local xhttp_enabled=$5
+    local grpc_enabled=$6
+    local trojan_enabled=$7
+    local sub_enabled=$8
     
+    # Always output reject backend
     cat <<EOF
 
 # Reject backend for unknown SNI
@@ -61,31 +84,48 @@ backend reject_backend
     mode tcp
     timeout server 1s
     server reject 127.0.0.1:1 send-proxy
+EOF
+    
+    # Conditionally output backends
+    if [ "$xhttp_enabled" = "true" ]; then
+        cat <<EOF
 
 # XHTTP backend (TCP passthrough - Xray handles TLS)
 backend xhttp_backend
     mode tcp
-    option ssl-hello-chk
-    server xray_xhttp 127.0.0.1:$xhttp_port check
+    server xray_xhttp 127.0.0.1:$xhttp_port check inter 30s
+EOF
+    fi
+    
+    if [ "$grpc_enabled" = "true" ]; then
+        cat <<EOF
 
 # gRPC backend (TCP passthrough - Xray handles TLS)
 backend grpc_backend
     mode tcp
-    option ssl-hello-chk
-    server xray_grpc 127.0.0.1:$grpc_port check
+    server xray_grpc 127.0.0.1:$grpc_port check inter 30s
+EOF
+    fi
+    
+    if [ "$trojan_enabled" = "true" ]; then
+        cat <<EOF
 
 # Trojan backend (TCP passthrough - Xray handles TLS)
 backend trojan_backend
     mode tcp
-    option ssl-hello-chk
-    server xray_trojan 127.0.0.1:$trojan_port check
+    server xray_trojan 127.0.0.1:$trojan_port check inter 30s
+EOF
+    fi
+    
+    if [ "$sub_enabled" = "true" ]; then
+        cat <<EOF
 
 # Subscription backend (TCP passthrough - Nginx handles TLS)
 backend subscription_backend
     mode tcp
-    option ssl-hello-chk
-    server nginx_sub 127.0.0.1:$nginx_port check
+    server nginx_sub 127.0.0.1:$nginx_port check inter 30s
 EOF
+    fi
 }
 
 # Generate complete HAProxy configuration
@@ -105,8 +145,20 @@ generate_haproxy_config() {
     
     if [ "$stats_pass" = "auto-generate" ] || [ "$stats_pass" = "null" ]; then
         stats_pass=$(generate_stats_password)
-        echo "$stats_pass" > /tmp/haproxy_stats_password
+        echo "$stats_pass" > $AUTOCONF_DIR/haproxy_stats_password
     fi
+    
+    # Get protocol enabled states
+    local xhttp_enabled
+    local grpc_enabled
+    local trojan_enabled
+    local sub_enabled
+    
+    xhttp_enabled=$(echo "$config_json" | jq -r '.protocols.xhttp.enabled // false')
+    grpc_enabled=$(echo "$config_json" | jq -r '.protocols.grpc.enabled // false')
+    trojan_enabled=$(echo "$config_json" | jq -r '.protocols.trojan.enabled // false')
+    sub_enabled=$(echo "$config_json" | jq -r '.subscription.enabled // false')
+    
     # Get protocol ports (Reality uses direct access, not through HAProxy)
     local xhttp_port
     local grpc_port
@@ -124,26 +176,20 @@ generate_haproxy_config() {
     wildcard_base=$(echo "$config_json" | jq -r '.domains.wildcard_base')
     sub_domain=$(echo "$config_json" | jq -r '.domains.subscription')
     
-    # Generate random subdomains or use configured ones
-    local xhttp_domain
-    local grpc_domain
-    local trojan_domain
+    # Generate random subdomains or use configured ones (only for enabled protocols)
+    local xhttp_domain=""
+    local grpc_domain=""
+    local trojan_domain=""
     
     if [ "$wildcard_base" != "null" ]; then
-        # Generate random subdomains
-        xhttp_domain="$(generate_random_subdomain).${wildcard_base}"
-        grpc_domain="$(generate_random_subdomain).${wildcard_base}"
-        trojan_domain="$(generate_random_subdomain).${wildcard_base}"
-        
-        # Save to temp files for use in subscription generation
-        echo "$xhttp_domain" > /tmp/random_subdomain_xhttp
-        echo "$grpc_domain" > /tmp/random_subdomain_grpc
-        echo "$trojan_domain" > /tmp/random_subdomain_trojan
+        [ "$xhttp_enabled" = "true" ] && xhttp_domain="$(generate_random_subdomain).${wildcard_base}"
+        [ "$grpc_enabled" = "true" ] && grpc_domain="$(generate_random_subdomain).${wildcard_base}"
+        [ "$trojan_enabled" = "true" ] && trojan_domain="$(generate_random_subdomain).${wildcard_base}"
     else
         # Use configured domains (backward compatibility)
-        xhttp_domain=$(echo "$config_json" | jq -r '.domains.xhttp // "xhttp.example.com"')
-        grpc_domain=$(echo "$config_json" | jq -r '.domains.grpc // "grpc.example.com"')
-        trojan_domain=$(echo "$config_json" | jq -r '.domains.trojan // "trojan.example.com"')
+        [ "$xhttp_enabled" = "true" ] && xhttp_domain=$(echo "$config_json" | jq -r '.domains.xhttp // "xhttp.example.com"')
+        [ "$grpc_enabled" = "true" ] && grpc_domain=$(echo "$config_json" | jq -r '.domains.grpc // "grpc.example.com"')
+        [ "$trojan_enabled" = "true" ] && trojan_domain=$(echo "$config_json" | jq -r '.domains.trojan // "trojan.example.com"')
     fi
     
     # Generate configuration
@@ -176,25 +222,34 @@ defaults
     timeout client  50000
     timeout server  50000
 
-$(create_frontend_config "$frontend_port" "$stats_port")
+$(create_frontend_config "$frontend_port" "$stats_port" "$xhttp_enabled" "$grpc_enabled" "$trojan_enabled" "$sub_enabled")
 
-$(create_backends_config "$xhttp_port" "$grpc_port" "$trojan_port" "$nginx_port")
+$(create_backends_config "$xhttp_port" "$grpc_port" "$trojan_port" "$nginx_port" "$xhttp_enabled" "$grpc_enabled" "$trojan_enabled" "$sub_enabled")
 EOF
     
-    # Create environment file for domain substitution
-    cat > /tmp/haproxy_env <<ENVEOF
+    # Create unified environment file for domain substitution and other modules
+    cat > $AUTOCONF_DIR/haproxy_env <<ENVEOF
+# HAProxy Environment Variables - Auto-generated
+# Used for HAProxy config substitution and other modules
+
+# Domain configurations
 XHTTP_DOMAIN=$xhttp_domain
 GRPC_DOMAIN=$grpc_domain
 TROJAN_DOMAIN=$trojan_domain
 SUB_DOMAIN=$sub_domain
+WILDCARD_BASE=$wildcard_base
+
+# HAProxy stats credentials
 STATS_USER=$stats_user
 STATS_PASS=$stats_pass
+
+# Ports
+XHTTP_PORT=$xhttp_port
+GRPC_PORT=$grpc_port
+TROJAN_PORT=$trojan_port
+NGINX_PORT=$nginx_port
+STATS_PORT=$stats_port
 ENVEOF
-    
-    # Also save domains to separate files for easy access
-    echo "$xhttp_domain" > /tmp/haproxy_xhttp_domain
-    echo "$grpc_domain" > /tmp/haproxy_grpc_domain
-    echo "$trojan_domain" > /tmp/haproxy_trojan_domain
 }
 
 # Main execution

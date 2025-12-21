@@ -9,6 +9,7 @@ set -euo pipefail
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODULES_DIR="$SCRIPT_DIR/modules"
+AUTOCONF_DIR="$SCRIPT_DIR/autoconf"
 
 # Colors
 RED='\033[0;31m'
@@ -229,11 +230,21 @@ deploy_haproxy_config() {
     haproxy_config=$("$MODULES_DIR/haproxy-config.sh" "$CONFIG_FILE")
     
     # Load environment variables for domain substitution
-    if [ -f /tmp/haproxy_env ]; then
-        source /tmp/haproxy_env
+    if [ -f $AUTOCONF_DIR/haproxy_env ]; then
+        # Export variables for envsubst
+        export XHTTP_DOMAIN=$(grep "^XHTTP_DOMAIN=" $AUTOCONF_DIR/haproxy_env | cut -d= -f2)
+        export GRPC_DOMAIN=$(grep "^GRPC_DOMAIN=" $AUTOCONF_DIR/haproxy_env | cut -d= -f2)
+        export TROJAN_DOMAIN=$(grep "^TROJAN_DOMAIN=" $AUTOCONF_DIR/haproxy_env | cut -d= -f2)
+        export SUB_DOMAIN=$(grep "^SUB_DOMAIN=" $AUTOCONF_DIR/haproxy_env | cut -d= -f2)
+        export STATS_USER=$(grep "^STATS_USER=" $AUTOCONF_DIR/haproxy_env | cut -d= -f2)
+        export STATS_PASS=$(grep "^STATS_PASS=" $AUTOCONF_DIR/haproxy_env | cut -d= -f2)
         
-        # Substitute variables in config
-        haproxy_config=$(echo "$haproxy_config" | envsubst)
+        # Substitute variables in config (specify exact variables to replace)
+        haproxy_config=$(echo "$haproxy_config" | envsubst '$XHTTP_DOMAIN $GRPC_DOMAIN $TROJAN_DOMAIN $SUB_DOMAIN $STATS_USER $STATS_PASS')
+        
+        log_info "Domain substitution: XHTTP=$XHTTP_DOMAIN, GRPC=$GRPC_DOMAIN, TROJAN=$TROJAN_DOMAIN, SUB=$SUB_DOMAIN"
+    else
+        log_warn "haproxy_env file not found, domain substitution skipped"
     fi
     
     # Write to config file
@@ -355,7 +366,7 @@ display_summary() {
     local stats_user
     stats_port=$(echo "$CONFIG_JSON" | jq -r '.haproxy.stats_port // 8404')
     stats_user=$(echo "$CONFIG_JSON" | jq -r '.haproxy.stats_user // "admin"')
-    [ -f /tmp/haproxy_stats_password ] && stats_pass=$(cat /tmp/haproxy_stats_password) || stats_pass="<see config>"
+    [ -f $AUTOCONF_DIR/haproxy_stats_password ] && stats_pass=$(cat $AUTOCONF_DIR/haproxy_stats_password) || stats_pass="<see config>"
     echo "  URL: http://$SERVER_IP:$stats_port/stats"
     echo "  User: $stats_user"
     echo "  Pass: $stats_pass"
@@ -390,6 +401,11 @@ main_deploy() {
     load_config "$config_file"
     CONFIG_FILE="$config_file"
     
+    # Create autoconf directory for generated configs
+    mkdir -p "$AUTOCONF_DIR"
+    export AUTOCONF_DIR
+    log_info "Autoconf directory: $AUTOCONF_DIR"
+    
     # Ensure module scripts are executable
     log_info "Setting executable permissions for modules..."
     chmod +x "$MODULES_DIR"/*.sh
@@ -401,14 +417,14 @@ main_deploy() {
     install_haproxy
     configure_system
     
+    # Certificate phase (must be before Xray config as it references cert files)
+    log_info "===== Certificate Phase ====="
+    manage_certificates
+    
     # Configuration phase
     log_info "===== Configuration Phase ====="
     deploy_xray_config
     deploy_haproxy_config
-    
-    # Certificate phase
-    log_info "===== Certificate Phase ====="
-    manage_certificates
     
     # Optional features
     log_info "===== Optional Features ====="
