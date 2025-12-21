@@ -1,0 +1,26 @@
+{
+    "servers": [
+        {
+            "name": "vps-sg-01",
+            "host": "1.2.3.4",
+            "port": 22,
+            "user": "root",
+            "auth_method": "key",
+            "key_path": "/path/to/key.pem",
+            "config_file": "config-sg.json"
+        },
+        {
+            "name": "vps-us-01",
+            "host": "5.6.7.8",
+            "port": 22,
+            "user": "root",
+            "auth_method": "password",
+            "password": "your_password",
+            "config_file": "config-us.json"
+        }
+    ],
+    "global": {
+        "subscription_domain": "sub.example.com",
+        "update_interval_hours": 12
+    }
+}

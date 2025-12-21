@@ -1,0 +1,80 @@
+{
+  "server_info": {
+    "name": "vps-01",
+    "region": "Singapore"
+  },
+  "domains": {
+    "reality": null,
+    "wildcard_base": "proxy.example.com",
+    "cdn_domain": "cdn.example.com",
+    "subscription": "sub.example.com"
+  },
+  "uuids": {
+    "vless_reality": "auto-generate",
+    "vless_xhttp": "auto-generate",
+    "vless_grpc": "auto-generate",
+    "trojan_password": "auto-generate"
+  },
+  "protocols": {
+    "reality": {
+      "enabled": true,
+      "port": 9443,
+      "dest": "www.microsoft.com:443",
+      "server_names": [
+        "www.microsoft.com",
+        "www.bing.com"
+      ]
+    },
+    "xhttp": {
+      "enabled": true,
+      "port": 8443,
+      "path": "/api/v2/download",
+      "cdn_compatible": true
+    },
+    "grpc": {
+      "enabled": true,
+      "port": 2083,
+      "service_name": "GunService",
+      "cdn_compatible": true
+    },
+    "trojan": {
+      "enabled": false,
+      "port": 2087
+    }
+  },
+  "haproxy": {
+    "enabled": true,
+    "frontend_port": 443,
+    "stats_port": 2053,
+    "stats_user": "admin",
+    "stats_password": "auto-generate"
+  },
+  "certificates": {
+    "auto_issue": true,
+    "email": "admin@example.com",
+    "provider": "letsencrypt",
+    "wildcard": true,
+    "dns_provider": "cloudflare",
+    "dns_api_token": null
+  },
+  "warp_outbound": {
+    "enabled": false,
+    "license_key": null,
+    "routing_mode": "selective",
+    "route_domains": [
+      "geosite:netflix",
+      "geosite:disney",
+      "geosite:hbo",
+      "geosite:spotify"
+    ],
+    "route_ips": [],
+    "block_bt": true
+  },
+  "subscription": {
+    "enabled": true,
+    "nginx_port": 2096,
+    "login_user": "admin",
+    "login_password": "auto-generate"
+  },
+  "email": "admin@example.com"
+}
