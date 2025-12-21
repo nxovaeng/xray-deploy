@@ -390,6 +390,10 @@ main_deploy() {
     load_config "$config_file"
     CONFIG_FILE="$config_file"
     
+    # Ensure module scripts are executable
+    log_info "Setting executable permissions for modules..."
+    chmod +x "$MODULES_DIR"/*.sh
+    
     # Install phase
     log_info "===== Installation Phase ====="
     install_dependencies

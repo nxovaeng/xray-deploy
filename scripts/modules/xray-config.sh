@@ -16,12 +16,21 @@ generate_uuid() {
 # Generate Reality keys using xray x25519
 generate_reality_keys() {
     local keys_output
-    keys_output=$(/usr/local/bin/xray x25519 2>/dev/null)
+    keys_output=$(/usr/local/bin/xray x25519 2>&1)
     
     local private_key
     local public_key
-    private_key=$(echo "$keys_output" | grep "Private key:" | awk '{print $3}')
-    public_key=$(echo "$keys_output" | grep "Public key:" | awk '{print $3}')
+    
+    # Try different parsing methods for compatibility
+    private_key=$(echo "$keys_output" | grep -i "private" | awk -F': ' '{print $2}' | tr -d ' ')
+    public_key=$(echo "$keys_output" | grep -i "public" | awk -F': ' '{print $2}' | tr -d ' ')
+    
+    # Validate keys are not empty
+    if [ -z "$private_key" ] || [ -z "$public_key" ]; then
+        echo "ERROR: Failed to generate Reality keys" >&2
+        echo "xray x25519 output: $keys_output" >&2
+        exit 1
+    fi
     
     echo "$private_key|$public_key"
 }
