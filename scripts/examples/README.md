@@ -15,6 +15,9 @@ vim my-config.json
 
 # 3. 部署
 sudo bash proxy-deploy.sh --config my-config.json
+
+# 4. 更新
+sudo bash proxy-deploy.sh --config my-config.json --update
 ```
 
 ## 配置要点
@@ -24,7 +27,7 @@ sudo bash proxy-deploy.sh --config my-config.json
 - `domains.wildcard_base`: 通配符域名基础（如：`proxy.example.com`）
 - `domains.subscription`: 订阅域名（如：`sub.example.com`）
 - `domains.cdn_domain`: CDN域名（可选，用于CDN加速的协议）
-- `email`: 证书申请邮箱
+- `certificates.email`: 证书申请邮箱
 
 ### 通配符证书配置
 

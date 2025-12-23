@@ -1,26 +1,23 @@
 #!/bin/bash
 # Nginx Subscription Server Setup Module
+# 从 autoconf.env 读取所有变量，仅负责配置生成
 
 set -euo pipefail
 
 # Use AUTOCONF_DIR from environment or fallback to /tmp
 AUTOCONF_DIR="${AUTOCONF_DIR:-/tmp}"
+AUTOCONF_FILE="${AUTOCONF_DIR}/autoconf.env"
+
+# Load auto-generated variables (single source of truth)
+if [ -f "$AUTOCONF_FILE" ]; then
+    source "$AUTOCONF_FILE"
+fi
 
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
-
-# Generate random ShortID (12 characters, alphanumeric)
-generate_short_id() {
-    tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 12
-}
-
-# Generate random subdomain (5 characters, lowercase alphanumeric)
-generate_random_subdomain() {
-    tr -dc 'a-z0-9' < /dev/urandom | head -c 5
-}
 
 # Install and configure Nginx
 install_nginx() {
@@ -69,20 +66,20 @@ generate_subscription_content() {
     
     echo -e "${YELLOW}Generating subscription content...${NC}"
     
-    # Read UUIDs and credentials from temp files
-    local reality_uuid=$(cat $AUTOCONF_DIR/uuid_reality 2>/dev/null || echo "")
-    local xhttp_uuid=$(cat $AUTOCONF_DIR/uuid_xhttp 2>/dev/null || echo "")
-    local grpc_uuid=$(cat $AUTOCONF_DIR/uuid_grpc 2>/dev/null || echo "")
-    local trojan_password=$(cat $AUTOCONF_DIR/password_trojan 2>/dev/null || echo "")
-    local reality_pubkey=$(cat $AUTOCONF_DIR/reality_public_key 2>/dev/null || echo "")
-    local reality_short_id=$(cat $AUTOCONF_DIR/reality_short_id 2>/dev/null || echo "")
+    # Read UUIDs and credentials from autoconf.env only (single source of truth)
+    local reality_uuid="${UUID_REALITY:-}"
+    local xhttp_uuid="${UUID_XHTTP:-}"
+    local grpc_uuid="${UUID_GRPC:-}"
+    local trojan_password="${TROJAN_PASSWORD:-}"
+    local reality_pubkey="${REALITY_PUBLIC_KEY:-}"
+    local reality_short_id="${REALITY_SHORT_ID:-}"
     
     
-    # Read domains from haproxy_env if exists, or use CDN domain
+    # Read domains from autoconf.env or use CDN domain
     local cdn_domain=$(echo "$config_json" | jq -r '.domains.cdn_domain // null')
-    local xhttp_domain=$(grep "^XHTTP_DOMAIN=" $AUTOCONF_DIR/haproxy_env 2>/dev/null | cut -d= -f2 || echo "$cdn_domain")
-    local grpc_domain=$(grep "^GRPC_DOMAIN=" $AUTOCONF_DIR/haproxy_env 2>/dev/null | cut -d= -f2 || echo "$cdn_domain")
-    local trojan_domain=$(grep "^TROJAN_DOMAIN=" $AUTOCONF_DIR/haproxy_env 2>/dev/null | cut -d= -f2 || echo "$cdn_domain")
+    local xhttp_domain="${DOMAIN_XHTTP:-${cdn_domain}}"
+    local grpc_domain="${DOMAIN_GRPC:-${cdn_domain}}"
+    local trojan_domain="${DOMAIN_TROJAN:-${cdn_domain}}"
     
     # Fallback to example domains if CDN not configured
     [ -z "$xhttp_domain" ] || [ "$xhttp_domain" = "null" ] && xhttp_domain="xhttp.example.com"
@@ -106,7 +103,7 @@ generate_subscription_content() {
     if [ -n "$xhttp_uuid" ]; then
         local xhttp_enabled=$(echo "$config_json" | jq -r '.protocols.xhttp.enabled')
         if [ "$xhttp_enabled" = "true" ]; then
-            local xhttp_path=$(echo "$config_json" | jq -r '.protocols.xhttp.path')
+            local xhttp_path="${XHTTP_PATH:-$(echo "$config_json" | jq -r '.protocols.xhttp.path')}"
             local xhttp_cdn=$(echo "$config_json" | jq -r '.protocols.xhttp.cdn_compatible // false')
             
             # Direct connection link (using random subdomain)
@@ -123,7 +120,7 @@ generate_subscription_content() {
     if [ -n "$grpc_uuid" ]; then
         local grpc_enabled=$(echo "$config_json" | jq -r '.protocols.grpc.enabled')
         if [ "$grpc_enabled" = "true" ]; then
-            local grpc_service=$(echo "$config_json" | jq -r '.protocols.grpc.service_name')
+            local grpc_service="${GRPC_SERVICE_NAME:-$(echo "$config_json" | jq -r '.protocols.grpc.service_name')}"
             local grpc_cdn=$(echo "$config_json" | jq -r '.protocols.grpc.cdn_compatible // false')
             
             # Direct connection link
@@ -246,11 +243,6 @@ create_login_page() {
             <button class="copy-btn" onclick="copyToClipboard('base64-url')">复制链接</button>
         </div>
         <div class="info">
-            <h3>Clash 订阅</h3>
-            <div class="url-box" id="clash-url">https://${sub_domain}/${short_id}/clash.yaml</div>
-            <button class="copy-btn" onclick="copyToClipboard('clash-url')">复制链接</button>
-        </div>
-        <div class="info">
             <h3>分享链接列表</h3>
             <div class="url-box" id="links-url">https://${sub_domain}/${short_id}/links.txt</div>
             <button class="copy-btn" onclick="copyToClipboard('links-url')">复制链接</button>
@@ -293,6 +285,7 @@ configure_nginx_subscription() {
     cat > /etc/nginx/sites-available/subscription <<EOF
 server {
     listen 127.0.0.1:${nginx_port} ssl http2;
+    listen [::1]:${nginx_port} ssl http2;
     server_name ${sub_domain};
     
     # TLS configuration
@@ -361,10 +354,10 @@ setup_subscription() {
     local stats_port
     
     sub_enabled=$(echo "$config_json" | jq -r '.subscription.enabled // true')
-    sub_domain=$(echo "$config_json" | jq -r '.domains.subscription')
+    sub_domain="$SUBSCRIPTION_DOMAIN"
     nginx_port=$(echo "$config_json" | jq -r '.subscription.nginx_port // 2096')
-    login_user=$(echo "$config_json" | jq -r '.subscription.login_user // "admin"')
-    login_password=$(echo "$config_json" | jq -r '.subscription.login_password')
+    login_user="$HAPROXY_STATS_USER"
+    login_password="$SUBSCRIPTION_PASSWORD"
     stats_port=$(echo "$config_json" | jq -r '.haproxy.stats_port // 2053')
     
     if [ "$sub_enabled" != "true" ]; then
@@ -377,12 +370,6 @@ setup_subscription() {
         return 0
     fi
     
-    # Generate random password if auto-generate
-    if [ "$login_password" = "null" ] || [ "$login_password" = "auto-generate" ]; then
-        login_password=$(openssl rand -base64 16 | tr -d '/+=' | head -c 16)
-        echo "$login_password" > $AUTOCONF_DIR/subscription_password
-    fi
-    
     echo -e "${YELLOW}=====================================${NC}"
     echo -e "${YELLOW}Subscription Setup${NC}"
     echo -e "${YELLOW}=====================================${NC}"
@@ -391,10 +378,10 @@ setup_subscription() {
     # Install Nginx
     install_nginx
     
-    # Generate ShortID
-    local short_id=$(generate_short_id)
-    echo -e "${GREEN}Generated ShortID: ${short_id}${NC}"
-    echo "$short_id" > $AUTOCONF_DIR/subscription_shortid
+    # Use shortid and password from autoconf.env (already generated by auto-generate.sh)
+    local short_id="$SUBSCRIPTION_SHORTID"
+    local login_password="$SUBSCRIPTION_PASSWORD"
+    echo -e "${GREEN}ShortID: ${short_id}${NC}"
     
     # Create directory structure
     create_subscription_structure "$short_id"

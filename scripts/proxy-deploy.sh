@@ -195,6 +195,18 @@ load_config() {
     log_success "Configuration loaded: $config_file"
 }
 
+# Generate auto-configuration variables
+generate_auto_config() {
+    log_info "Generating auto-configuration variables..."
+    
+    if ! "$MODULES_DIR/auto-generate.sh" generate "$CONFIG_FILE"; then
+        log_error "Failed to generate auto-configuration"
+        return 1
+    fi
+    
+    log_success "Auto-configuration variables generated"
+}
+
 # Deploy Xray configuration
 deploy_xray_config() {
     log_info "Generating Xray configuration..."
@@ -229,22 +241,25 @@ deploy_haproxy_config() {
     local haproxy_config
     haproxy_config=$("$MODULES_DIR/haproxy-config.sh" "$CONFIG_FILE")
     
-    # Load environment variables for domain substitution
-    if [ -f $AUTOCONF_DIR/haproxy_env ]; then
-        # Export variables for envsubst
-        export XHTTP_DOMAIN=$(grep "^XHTTP_DOMAIN=" $AUTOCONF_DIR/haproxy_env | cut -d= -f2)
-        export GRPC_DOMAIN=$(grep "^GRPC_DOMAIN=" $AUTOCONF_DIR/haproxy_env | cut -d= -f2)
-        export TROJAN_DOMAIN=$(grep "^TROJAN_DOMAIN=" $AUTOCONF_DIR/haproxy_env | cut -d= -f2)
-        export SUB_DOMAIN=$(grep "^SUB_DOMAIN=" $AUTOCONF_DIR/haproxy_env | cut -d= -f2)
-        export STATS_USER=$(grep "^STATS_USER=" $AUTOCONF_DIR/haproxy_env | cut -d= -f2)
-        export STATS_PASS=$(grep "^STATS_PASS=" $AUTOCONF_DIR/haproxy_env | cut -d= -f2)
-        
+    # Load autoconf.env and export variables for envsubst (single source of truth)
+    AUTOCONF_FILE="$AUTOCONF_DIR/autoconf.env"
+    if [ -f "$AUTOCONF_FILE" ]; then
+        # shellcheck disable=SC1090
+        source "$AUTOCONF_FILE"
+
+        export XHTTP_DOMAIN="${DOMAIN_XHTTP:-}"
+        export GRPC_DOMAIN="${DOMAIN_GRPC:-}"
+        export TROJAN_DOMAIN="${DOMAIN_TROJAN:-}"
+        export SUB_DOMAIN="${SUBSCRIPTION_DOMAIN:-}"
+        export STATS_USER="${HAPROXY_STATS_USER:-}"
+        export STATS_PASS="${HAPROXY_STATS_PASSWORD:-}"
+
         # Substitute variables in config (specify exact variables to replace)
         haproxy_config=$(echo "$haproxy_config" | envsubst '$XHTTP_DOMAIN $GRPC_DOMAIN $TROJAN_DOMAIN $SUB_DOMAIN $STATS_USER $STATS_PASS')
-        
+
         log_info "Domain substitution: XHTTP=$XHTTP_DOMAIN, GRPC=$GRPC_DOMAIN, TROJAN=$TROJAN_DOMAIN, SUB=$SUB_DOMAIN"
     else
-        log_warn "haproxy_env file not found, domain substitution skipped"
+        log_warn "autoconf.env not found, domain substitution skipped"
     fi
     
     # Write to config file
@@ -351,31 +366,9 @@ display_summary() {
     [ "$trojan_enabled" = "true" ] && echo "  ✓ Trojan-TCP-TLS"
     
     echo ""
-    echo "Subscription URLs:"
-    if [ "$sub_domain" != "null" ]; then
-        echo "  Base64: http://$sub_domain/subscription"
-        echo "  Clash:  http://$sub_domain/clash.yaml"
-        echo "  Links:  http://$sub_domain/links.txt"
-    else
-        echo "  Check: /var/www/html/"
-    fi
-    
-    echo ""
-    echo "HAProxy Stats:"
-    local stats_port
-    local stats_user
-    stats_port=$(echo "$CONFIG_JSON" | jq -r '.haproxy.stats_port // 8404')
-    stats_user=$(echo "$CONFIG_JSON" | jq -r '.haproxy.stats_user // "admin"')
-    [ -f $AUTOCONF_DIR/haproxy_stats_password ] && stats_pass=$(cat $AUTOCONF_DIR/haproxy_stats_password) || stats_pass="<see config>"
-    echo "  URL: http://$SERVER_IP:$stats_port/stats"
-    echo "  User: $stats_user"
-    echo "  Pass: $stats_pass"
-    
-    echo ""
     echo "Useful Commands:"
     echo "  Check Xray status:   systemctl status xray"
     echo "  Check Xray logs:     journalctl -u xray -f"
-    echo "  Check HAProxy stats: curl http://localhost:$stats_port/stats"
     echo "  Renew certificates:  ~/.acme.sh/acme.sh --renew-all"
     echo ""
     echo -e "${GREEN}=====================================${NC}"
@@ -421,6 +414,10 @@ main_deploy() {
     log_info "===== Certificate Phase ====="
     manage_certificates
     
+    # Auto-configuration phase (generate variables before config generation)
+    log_info "===== Auto-Configuration Phase ====="
+    generate_auto_config
+    
     # Configuration phase
     log_info "===== Configuration Phase ====="
     deploy_xray_config
@@ -464,6 +461,80 @@ check_only() {
     echo ""
 }
 
+# Update mode - skip installation and certificate phases
+update_deploy() {
+    local config_file=$1
+    
+    print_banner
+    echo ""
+    log_info "Running in update mode - skipping installation and certificate phases..."
+    echo ""
+    
+    # Pre-flight checks (lightweight)
+    check_root
+    detect_os
+    
+    # Get server IP
+    SERVER_IP=$(get_server_ip)
+    log_info "Server IP: $SERVER_IP"
+    
+    # Load configuration
+    load_config "$config_file"
+    CONFIG_FILE="$config_file"
+    
+    # Create autoconf directory for generated configs
+    mkdir -p "$AUTOCONF_DIR"
+    export AUTOCONF_DIR
+    log_info "Autoconf directory: $AUTOCONF_DIR"
+    
+    # Ensure module scripts are executable
+    log_info "Setting executable permissions for modules..."
+    chmod +x "$MODULES_DIR"/*.sh
+    
+    # Auto-configuration phase (generate variables before config generation)
+    log_info "===== Auto-Configuration Phase ====="
+    generate_auto_config
+    
+    # Configuration phase (skip installation)
+    log_info "===== Configuration Phase ====="
+    deploy_xray_config
+    deploy_haproxy_config
+    
+    # Optional features
+    log_info "===== Optional Features ====="
+    generate_subscription
+    
+    # Start services (restart, not initial start)
+    log_info "===== Restarting Services ====="
+    systemctl restart xray
+    if systemctl is-active --quiet xray; then
+        log_success "Xray restarted successfully"
+    else
+        log_error "Failed to restart Xray"
+        journalctl -u xray -n 50 --no-pager
+        return 1
+    fi
+    
+    # Restart HAProxy if enabled
+    local haproxy_enabled
+    haproxy_enabled=$(echo "$CONFIG_JSON" | jq -r '.haproxy.enabled')
+    
+    if [ "$haproxy_enabled" = "true" ]; then
+        systemctl restart haproxy
+        
+        if systemctl is-active --quiet haproxy; then
+            log_success "HAProxy restarted successfully"
+        else
+            log_error "Failed to restart HAProxy"
+            journalctl -u haproxy -n 50 --no-pager
+            return 1
+        fi
+    fi
+    
+    # Display summary
+    display_summary
+}
+
 # Batch deployment from servers.json
 batch_deploy() {
     local servers_file=$1
@@ -481,12 +552,16 @@ Usage: $0 [OPTIONS]
 Options:
   --config FILE         Path to configuration JSON file (required)
   --check-only          Validate configuration without deploying
+  --update              Update configuration only (skip installation & certificates)
   --batch FILE          Deploy to multiple servers from servers.json
   --help                Show this help message
 
 Examples:
-  # Single server deployment
-  sudo $0 --config config-template.json
+  # Initial deployment (install + configure)
+  sudo $0 --config my-config.json
+  
+  # Update configuration only (faster, skip install/cert phases)
+  sudo $0 --config my-config.json --update
   
   # Check configuration only
   sudo $0 --config my-config.json --check-only
@@ -501,6 +576,7 @@ EOF
 # Parse command line arguments
 CONFIG_FILE=""
 CHECK_ONLY=false
+UPDATE_ONLY=false
 BATCH_FILE=""
 
 while [[ $# -gt 0 ]]; do
@@ -511,6 +587,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --check-only)
             CHECK_ONLY=true
+            shift
+            ;;
+        --update)
+            UPDATE_ONLY=true
             shift
             ;;
         --batch)
@@ -533,6 +613,8 @@ if [ -n "$BATCH_FILE" ]; then
 elif [ -n "$CONFIG_FILE" ]; then
     if [ "$CHECK_ONLY" = true ]; then
         check_only "$CONFIG_FILE"
+    elif [ "$UPDATE_ONLY" = true ]; then
+        update_deploy "$CONFIG_FILE"
     else
         main_deploy "$CONFIG_FILE"
     fi

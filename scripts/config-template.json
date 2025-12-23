@@ -28,13 +28,11 @@
     "xhttp": {
       "enabled": true,
       "port": 8443,
-      "path": "/download",
       "cdn_compatible": true
     },
     "grpc": {
       "enabled": true,
       "port": 2083,
-      "service_name": "GunService",
       "cdn_compatible": true
     },
     "trojan": {

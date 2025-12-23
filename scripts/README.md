@@ -1,23 +1,6 @@
 # Multi-Protocol Proxy Deployment Script
 
-一键部署多协议代理服务器，支持 **Reality、XHTTP、gRPC、Trojan** 四种协议，基于 **Xray 2025 官方推荐**。
-
-## ✨ 特性
-
-### 支持协议
-
-1. **VLESS-XTLS-Vision-Reality** - 最高性能，无需域名/证书，最强抗审查
-2. **VLESS-XHTTP-H2/H3-TLS** - HTTP/3 支持，新一代 CDN 传输
-3. **VLESS-gRPC-TLS** - 最佳 Cloudflare CDN 兼容性（已优化防断流）
-4. **Trojan-TCP-TLS** - 备用协议，GFW 友好
-
-### 核心功能
-
-- ✅ **HAProxy SNI 路由** - 基于域名自动路由到不同后端
-- ✅ **Cloudflare WARP 出站** - 可选路由通过 Cloudflare 网络
-- ✅ **订阅 URL 生成** - 自动生成 Base64、links.txt 格式
-- ✅ **BBR加速** - 自动启用 TCP BBR 拥塞控制
-- ✅ **系统优化** - TCP 参数优化，提升性能
+一键部署多协议代理服务器，支持 **XHTTP、gRPC** 协议，基于 **Xray 2025 官方推荐**。
 
 ## 📋 系统要求
 
@@ -48,13 +31,11 @@ nano my-config.json
 ```json
 {
   "domains": {
-    "reality": null,
     "wildcard_base": "proxy.example.com",
     "cdn_domain": "cdn.example.com",
     "subscription": "sub.example.com"
   },
   "protocols": {
-    "reality": { "enabled": true },       // 推荐：最强抗审查
     "grpc": { "enabled": true },          // 推荐：CDN 兼容性最佳
     "xhttp": { "enabled": false }         // 可选：HTTP/3 支持
   }

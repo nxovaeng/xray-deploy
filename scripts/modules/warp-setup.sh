@@ -5,6 +5,12 @@ set -euo pipefail
 
 # Use AUTOCONF_DIR from environment or fallback to /tmp
 AUTOCONF_DIR="${AUTOCONF_DIR:-/tmp}"
+AUTOCONF_FILE="${AUTOCONF_DIR}/autoconf.env"
+
+# Load auto-generated variables if available
+if [ -f "$AUTOCONF_FILE" ]; then
+    source "$AUTOCONF_FILE"
+fi
 
 # Colors
 RED='\033[0;31m'
