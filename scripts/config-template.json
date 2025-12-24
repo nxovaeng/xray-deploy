@@ -73,6 +73,5 @@
     "nginx_port": 2096,
     "login_user": "admin",
     "login_password": "auto-generate"
-  },
-  "email": "admin@example.com"
+  }
 }

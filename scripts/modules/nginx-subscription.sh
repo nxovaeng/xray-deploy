@@ -356,7 +356,7 @@ setup_subscription() {
     sub_enabled=$(echo "$config_json" | jq -r '.subscription.enabled // true')
     sub_domain="$SUBSCRIPTION_DOMAIN"
     nginx_port=$(echo "$config_json" | jq -r '.subscription.nginx_port // 2096')
-    login_user="$HAPROXY_STATS_USER"
+    login_user="$SUBSCRIPTION_USER"
     login_password="$SUBSCRIPTION_PASSWORD"
     stats_port=$(echo "$config_json" | jq -r '.haproxy.stats_port // 2053')
     

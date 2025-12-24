@@ -54,7 +54,7 @@ generate_reality_keys() {
 
 # 生成随机子域名
 generate_subdomain() {
-    openssl rand -hex 3 | head -c 5
+    openssl rand -hex 3 | head -c 6
 }
 
 # 生成随机 PATH（XHTTP）
@@ -111,37 +111,45 @@ generate() {
     [ "$haproxy_stats_password" = "null" ] || [ "$haproxy_stats_password" = "auto-generate" ] && haproxy_stats_password=$(generate_password)
     [ "$subscription_password" = "null" ] || [ "$subscription_password" = "auto-generate" ] && subscription_password=$(generate_password)
     
-    # Reality 密钥
+    # Reality 密钥 - 始终生成，即使 Reality 未启用，方便后续启用
     local reality_keys=""
     local reality_private_key=""
     local reality_public_key=""
     local reality_short_id=""
-    if [ "$reality_enabled" = "true" ] && command -v /usr/local/bin/xray &>/dev/null; then
+    local reality_short_id2=""
+    if command -v /usr/local/bin/xray &>/dev/null; then
         reality_keys=$(generate_reality_keys)
         if [ -n "$reality_keys" ]; then
             reality_private_key=$(echo "$reality_keys" | cut -d':' -f1)
             reality_public_key=$(echo "$reality_keys" | cut -d':' -f2)
             reality_short_id=$(generate_short_id)
+            reality_short_id2=$(generate_short_id)
         else
             echo "Warning: Failed to generate Reality keys"
             reality_keys="FAILED:FAILED"
             reality_private_key="FAILED"
             reality_public_key="FAILED"
             reality_short_id="FAILED"
+            reality_short_id2="FAILED"
         fi
     fi
     
-    # 子域名
+    # 子域名 - 始终生成，即使协议未启用，方便后续启用
     local wildcard_base=$(echo "$config_json" | jq -r '.domains.wildcard_base // ""')
-    local domain_xhttp=$([ "$xhttp_enabled" = "true" ] && [ -n "$wildcard_base" ] && echo "$(generate_subdomain).${wildcard_base}" || echo "")
-    local domain_grpc=$([ "$grpc_enabled" = "true" ] && [ -n "$wildcard_base" ] && echo "$(generate_subdomain).${wildcard_base}" || echo "")
-    local domain_trojan=$([ "$trojan_enabled" = "true" ] && [ -n "$wildcard_base" ] && echo "$(generate_subdomain).${wildcard_base}" || echo "")
+    local domain_xhttp=""
+    local domain_grpc=""
+    local domain_trojan=""
+    if [ -n "$wildcard_base" ]; then
+        domain_xhttp="$(generate_subdomain).${wildcard_base}"
+        domain_grpc="$(generate_subdomain).${wildcard_base}"
+        domain_trojan="$(generate_subdomain).${wildcard_base}"
+    fi
     local subscription_domain=$(echo "$config_json" | jq -r '.domains.subscription // ""')
     
-    # XHTTP PATH 和 gRPC Service Name
-    local xhttp_path=$([ "$xhttp_enabled" = "true" ] && generate_path || echo "")
-    local grpc_service_name=$([ "$grpc_enabled" = "true" ] && generate_service_name || echo "")
-    local subscription_shortid=$([ "$sub_enabled" = "true" ] && generate_short_id || echo "")
+    # XHTTP PATH 和 gRPC Service Name - 始终生成
+    local xhttp_path=$(generate_path)
+    local grpc_service_name=$(generate_service_name)
+    local subscription_shortid=$(generate_short_id)
     
     # 端口和用户
     local xhttp_port=$(echo "$config_json" | jq -r '.protocols.xhttp.port // 8443')
@@ -150,6 +158,7 @@ generate() {
     local nginx_port=$(echo "$config_json" | jq -r '.subscription.nginx_port // 2096')
     local haproxy_stats_port=$(echo "$config_json" | jq -r '.haproxy.stats_port // 2053')
     local haproxy_stats_user=$(echo "$config_json" | jq -r '.haproxy.stats_user // "admin"')
+    local subscription_user=$(echo "$config_json" | jq -r '.subscription.login_user // "admin"')
     
     # 生成统一的配置文件
     cat > "$AUTOCONF_FILE" <<EOF
@@ -171,6 +180,7 @@ REALITY_KEYS=$reality_keys
 REALITY_PRIVATE_KEY=$reality_private_key
 REALITY_PUBLIC_KEY=$reality_public_key
 REALITY_SHORT_ID=$reality_short_id
+REALITY_SHORT_ID2=$reality_short_id2
 
 # Domains
 DOMAIN_XHTTP=$domain_xhttp
@@ -195,6 +205,7 @@ HAPROXY_STATS_USER=$haproxy_stats_user
 
 # Subscription
 SUBSCRIPTION_SHORTID=$subscription_shortid
+SUBSCRIPTION_USER=$subscription_user
 EOF
     
     echo "✓ Generated: $AUTOCONF_FILE"

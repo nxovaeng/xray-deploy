@@ -4,15 +4,6 @@
 
 set -euo pipefail
 
-# Use AUTOCONF_DIR from environment or fallback to /tmp
-AUTOCONF_DIR="${AUTOCONF_DIR:-/tmp}"
-AUTOCONF_FILE="${AUTOCONF_DIR}/autoconf.env"
-
-# Load auto-generated variables if available
-if [ -f "$AUTOCONF_FILE" ]; then
-    source "$AUTOCONF_FILE"
-fi
-
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -349,7 +340,7 @@ manage_certificates() {
     local dns_provider
     local dns_api_token
     
-    email=$(echo "$config_json" | jq -r 'certificates.email')
+    email=$(echo "$config_json" | jq -r '.certificates.email')
     auto_issue=$(echo "$config_json" | jq -r '.certificates.auto_issue')
     wildcard_enabled=$(echo "$config_json" | jq -r '.certificates.wildcard // false')
     dns_provider=$(echo "$config_json" | jq -r '.certificates.dns_provider // "cloudflare"')

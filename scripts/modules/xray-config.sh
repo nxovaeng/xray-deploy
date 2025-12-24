@@ -23,6 +23,7 @@ create_reality_inbound() {
     local private_key=$5
     local public_key=$6
     local short_id=$7
+    local short_id2=$8
     
     cat <<EOF
 {
@@ -46,7 +47,7 @@ create_reality_inbound() {
       "dest": "$dest",
       "serverNames": $server_names,
       "privateKey": "$private_key",
-      "shortIds": ["$short_id", "$short_id"]
+      "shortIds": ["$short_id", "$short_id2"]
     }
   },
   "sniffing": {
@@ -390,6 +391,7 @@ generate_xray_config() {
     local reality_private_key="${REALITY_PRIVATE_KEY}"
     local reality_public_key="${REALITY_PUBLIC_KEY}"
     local reality_short_id="${REALITY_SHORT_ID}"
+    local reality_short_id2="${REALITY_SHORT_ID2}"
     
     # Validate that all required variables are set
     if [ -z "$reality_uuid" ] || [ -z "$xhttp_uuid" ] || [ -z "$grpc_uuid" ] || [ -z "$trojan_password" ]; then
@@ -410,7 +412,7 @@ generate_xray_config() {
         reality_sns=$(echo "$config_json" | jq -c '.protocols.reality.server_names')
         
         [ "$first" = false ] && inbounds+=","
-        inbounds+=$(create_reality_inbound "$reality_uuid" "$reality_port" "$reality_dest" "$reality_sns" "$reality_private_key" "$reality_public_key" "$reality_short_id")
+        inbounds+=$(create_reality_inbound "$reality_uuid" "$reality_port" "$reality_dest" "$reality_sns" "$reality_private_key" "$reality_public_key" "$reality_short_id" "$reality_short_id2")
         first=false
     fi
     

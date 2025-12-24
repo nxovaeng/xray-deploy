@@ -1,7 +1,6 @@
 #!/bin/bash
 # Multi-Protocol Proxy Deployment Script
 # Supports: Reality, XHTTP, gRPC, Trojan
-# Author: ProxySU Enhanced
 # Version: 1.0.0
 
 set -euo pipefail
@@ -22,12 +21,10 @@ NC='\033[0m' # No Color
 print_banner() {
     cat <<'EOF'
 ╔══════════════════════════════════════════════════════════════╗
+║     Multi-Protocol Proxy Deployment Script                   ║
 ║                                                              ║
-║     Multi-Protocol Proxy Deployment Script                  ║
-║                                                              ║
-║     Protocols: Reality | XHTTP | gRPC | Trojan              ║
-║     Features: HAProxy SNI | Auto Certs | WARP              ║
-║                                                              ║
+║     Protocols: Reality | XHTTP | gRPC | Trojan               ║
+║     Features: HAProxy SNI | Auto Certs | WARP                ║
 ╚══════════════════════════════════════════════════════════════╝
 EOF
 }
@@ -238,29 +235,9 @@ deploy_haproxy_config() {
     
     log_info "Generating HAProxy configuration..."
     
+    # haproxy-config.sh reads directly from autoconf.env (single source of truth)
     local haproxy_config
     haproxy_config=$("$MODULES_DIR/haproxy-config.sh" "$CONFIG_FILE")
-    
-    # Load autoconf.env and export variables for envsubst (single source of truth)
-    AUTOCONF_FILE="$AUTOCONF_DIR/autoconf.env"
-    if [ -f "$AUTOCONF_FILE" ]; then
-        # shellcheck disable=SC1090
-        source "$AUTOCONF_FILE"
-
-        export XHTTP_DOMAIN="${DOMAIN_XHTTP:-}"
-        export GRPC_DOMAIN="${DOMAIN_GRPC:-}"
-        export TROJAN_DOMAIN="${DOMAIN_TROJAN:-}"
-        export SUB_DOMAIN="${SUBSCRIPTION_DOMAIN:-}"
-        export STATS_USER="${HAPROXY_STATS_USER:-}"
-        export STATS_PASS="${HAPROXY_STATS_PASSWORD:-}"
-
-        # Substitute variables in config (specify exact variables to replace)
-        haproxy_config=$(echo "$haproxy_config" | envsubst '$XHTTP_DOMAIN $GRPC_DOMAIN $TROJAN_DOMAIN $SUB_DOMAIN $STATS_USER $STATS_PASS')
-
-        log_info "Domain substitution: XHTTP=$XHTTP_DOMAIN, GRPC=$GRPC_DOMAIN, TROJAN=$TROJAN_DOMAIN, SUB=$SUB_DOMAIN"
-    else
-        log_warn "autoconf.env not found, domain substitution skipped"
-    fi
     
     # Write to config file
     echo "$haproxy_config" > /etc/haproxy/haproxy.cfg
@@ -410,13 +387,13 @@ main_deploy() {
     install_haproxy
     configure_system
     
-    # Certificate phase (must be before Xray config as it references cert files)
-    log_info "===== Certificate Phase ====="
-    manage_certificates
-    
-    # Auto-configuration phase (generate variables before config generation)
+    # Auto-configuration phase (must be first - generates autoconf.env for all modules)
     log_info "===== Auto-Configuration Phase ====="
     generate_auto_config
+    
+    # Certificate phase (reads from autoconf.env, must be before Xray config as it references cert files)
+    log_info "===== Certificate Phase ====="
+    manage_certificates
     
     # Configuration phase
     log_info "===== Configuration Phase ====="
@@ -502,6 +479,7 @@ update_deploy() {
     
     # Optional features
     log_info "===== Optional Features ====="
+    setup_warp
     generate_subscription
     
     # Start services (restart, not initial start)
