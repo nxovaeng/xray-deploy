@@ -276,6 +276,17 @@ generate_subscription() {
     "$MODULES_DIR/nginx-subscription.sh" "$CONFIG_FILE" "$SERVER_IP"
 }
 
+# Setup code-server (optional)
+setup_code_server() {
+    local code_server_enabled
+    code_server_enabled=$(echo "$CONFIG_JSON" | jq -r '.code_server.enabled // false')
+    
+    if [ "$code_server_enabled" = "true" ]; then
+        log_info "Setting up code-server..."
+        "$MODULES_DIR/code-server-setup.sh" "$CONFIG_FILE"
+    fi
+}
+
 # Start services
 start_services() {
     log_info "Starting services..."
@@ -404,6 +415,7 @@ main_deploy() {
     log_info "===== Optional Features ====="
     setup_warp
     generate_subscription
+    setup_code_server
     
     # Start services
     log_info "===== Starting Services ====="
@@ -429,12 +441,13 @@ check_only() {
     # Display what would be deployed
     echo ""
     echo "Deployment Preview:"
-    echo "  Reality: $(echo "$CONFIG_JSON" | jq -r '.protocols.reality.enabled')"
-    echo "  XHTTP:   $(echo "$CONFIG_JSON" | jq -r '.protocols.xhttp.enabled')"
-    echo "  gRPC:    $(echo "$CONFIG_JSON" | jq -r '.protocols.grpc.enabled')"
-    echo "  Trojan:  $(echo "$CONFIG_JSON" | jq -r '.protocols.trojan.enabled')"
-    echo "  HAProxy: $(echo "$CONFIG_JSON" | jq -r '.haproxy.enabled')"
-    echo "  WARP:    $(echo "$CONFIG_JSON" | jq -r '.warp_outbound.enabled')"
+    echo "  Reality:     $(echo "$CONFIG_JSON" | jq -r '.protocols.reality.enabled')"
+    echo "  XHTTP:       $(echo "$CONFIG_JSON" | jq -r '.protocols.xhttp.enabled')"
+    echo "  gRPC:        $(echo "$CONFIG_JSON" | jq -r '.protocols.grpc.enabled')"
+    echo "  Trojan:      $(echo "$CONFIG_JSON" | jq -r '.protocols.trojan.enabled')"
+    echo "  HAProxy:     $(echo "$CONFIG_JSON" | jq -r '.haproxy.enabled')"
+    echo "  WARP:        $(echo "$CONFIG_JSON" | jq -r '.warp_outbound.enabled')"
+    echo "  code-server: $(echo "$CONFIG_JSON" | jq -r '.code_server.enabled // false')"
     echo ""
 }
 
@@ -481,6 +494,7 @@ update_deploy() {
     log_info "===== Optional Features ====="
     setup_warp
     generate_subscription
+    setup_code_server
     
     # Start services (restart, not initial start)
     log_info "===== Restarting Services ====="

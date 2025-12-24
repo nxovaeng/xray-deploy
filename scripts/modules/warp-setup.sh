@@ -203,28 +203,143 @@ update_xray_warp_config() {
     fi
 }
 
-# Test WARP connection
-test_warp_connection() {
-    echo -e "${YELLOW}Testing WARP connection...${NC}"
+# Install wireproxy for WARP testing
+install_wireproxy() {
+    echo -e "${YELLOW}Installing wireproxy...${NC}"
     
-    # Restart Xray to apply configuration
-    systemctl restart xray
+    # Check if already installed
+    if command -v wireproxy &> /dev/null; then
+        echo -e "${GREEN}wireproxy already installed: $(wireproxy --version 2>&1 | head -n1)${NC}"
+        return 0
+    fi
+    
+    # Download latest wireproxy
+    local arch="amd64"
+    [ "$(uname -m)" = "aarch64" ] && arch="arm64"
+    [ "$(uname -m)" = "armv7l" ] && arch="armv7"
+    
+    local os="linux"
+    local version="1.0.9"
+    local download_url="https://github.com/pufferffish/wireproxy/releases/download/v${version}/wireproxy_${os}_${arch}.tar.gz"
+    
+    echo -e "${YELLOW}Downloading wireproxy from: $download_url${NC}"
+    
+    local temp_dir=$(mktemp -d)
+    if wget -q -O "${temp_dir}/wireproxy.tar.gz" "$download_url"; then
+        tar -xzf "${temp_dir}/wireproxy.tar.gz" -C "${temp_dir}"
+        mv "${temp_dir}/wireproxy" /usr/local/bin/wireproxy
+        chmod +x /usr/local/bin/wireproxy
+        rm -rf "${temp_dir}"
+        echo -e "${GREEN}✓ wireproxy installed successfully${NC}"
+    else
+        rm -rf "${temp_dir}"
+        echo -e "${RED}✗ Failed to download wireproxy${NC}"
+        return 1
+    fi
+}
+
+# Test WARP connection using wireproxy
+test_warp_connection() {
+    echo -e "${YELLOW}Testing WARP connection via wireproxy...${NC}"
+    
+    local warp_dir="/etc/wireguard/warp"
+    local wg_config="${warp_dir}/wgcf-profile.conf"
+    local wireproxy_config="${warp_dir}/wireproxy.conf"
+    local wireproxy_port="40000"
+    local wireproxy_pid=""
+    
+    # Ensure wgcf config exists
+    if [ ! -f "$wg_config" ]; then
+        echo -e "${RED}✗ WireGuard config not found: $wg_config${NC}"
+        return 1
+    fi
+    
+    # Install wireproxy if not present
+    if ! command -v wireproxy &> /dev/null; then
+        install_wireproxy || {
+            echo -e "${RED}✗ Failed to install wireproxy${NC}"
+            return 1
+        }
+    fi
+    
+    # Generate wireproxy config from wgcf profile
+    echo -e "${YELLOW}Generating wireproxy configuration...${NC}"
+    
+    # Extract values from wgcf-profile.conf
+    local private_key=$(grep "PrivateKey" "$wg_config" | cut -d' ' -f3)
+    local addresses=$(grep "Address" "$wg_config" | cut -d' ' -f3)
+    local dns=$(grep "DNS" "$wg_config" | cut -d' ' -f3 | head -n1)
+    local public_key=$(grep "PublicKey" "$wg_config" | cut -d' ' -f3)
+    local endpoint=$(grep "Endpoint" "$wg_config" | cut -d' ' -f3)
+    
+    # Create wireproxy config
+    cat > "$wireproxy_config" <<EOF
+[Interface]
+PrivateKey = $private_key
+Address = $addresses
+DNS = ${dns:-1.1.1.1}
+MTU = 1420
+
+[Peer]
+PublicKey = $public_key
+Endpoint = $endpoint
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
+
+[Socks5]
+BindAddress = 127.0.0.1:${wireproxy_port}
+EOF
+    
+    echo -e "${GREEN}✓ wireproxy config generated${NC}"
+    
+    # Start wireproxy in background
+    echo -e "${YELLOW}Starting wireproxy on port ${wireproxy_port}...${NC}"
+    wireproxy -c "$wireproxy_config" > /dev/null 2>&1 &
+    wireproxy_pid=$!
+    
+    # Wait for wireproxy to start
     sleep 3
     
-    # Test via curl through Xray SOCKS proxy
-    local test_result
-    test_result=$(curl -s --max-time 10 --proxy socks5://127.0.0.1:10808 https://1.1.1.1/cdn-cgi/trace 2>/dev/null || echo "failed")
+    # Check if wireproxy is running
+    if ! kill -0 "$wireproxy_pid" 2>/dev/null; then
+        echo -e "${RED}✗ wireproxy failed to start${NC}"
+        return 1
+    fi
     
+    echo -e "${GREEN}✓ wireproxy started (PID: $wireproxy_pid)${NC}"
+    
+    # Test via curl through wireproxy SOCKS5 proxy
+    local test_result
+    echo -e "${YELLOW}Testing connection to Cloudflare...${NC}"
+    test_result=$(curl -s --max-time 15 --proxy socks5h://127.0.0.1:${wireproxy_port} https://1.1.1.1/cdn-cgi/trace 2>/dev/null || echo "failed")
+    
+    # Stop wireproxy
+    echo -e "${YELLOW}Stopping wireproxy...${NC}"
+    kill "$wireproxy_pid" 2>/dev/null
+    wait "$wireproxy_pid" 2>/dev/null
+    
+    # Check results
     if echo "$test_result" | grep -q "warp=on"; then
         echo -e "${GREEN}✓ WARP is working!${NC}"
+        echo ""
+        echo -e "${YELLOW}Connection details:${NC}"
+        echo "$test_result"
+        return 0
+    elif echo "$test_result" | grep -q "warp=plus"; then
+        echo -e "${GREEN}✓ WARP+ is working!${NC}"
+        echo ""
+        echo -e "${YELLOW}Connection details:${NC}"
         echo "$test_result"
         return 0
     elif echo "$test_result" | grep -q "warp=off"; then
         echo -e "${YELLOW}⚠ Connection successful but WARP is off${NC}"
+        echo ""
+        echo -e "${YELLOW}Connection details:${NC}"
         echo "$test_result"
         return 1
     else
         echo -e "${RED}✗ WARP connection test failed${NC}"
+        echo "Test result: $test_result"
         return 1
     fi
 }

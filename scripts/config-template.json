@@ -73,5 +73,14 @@
     "nginx_port": 2096,
     "login_user": "admin",
     "login_password": "auto-generate"
+  },
+  "code_server": {
+    "enabled": false,
+    "port": 8443,
+    "bind_address": "127.0.0.1",
+    "password": "auto-generate",
+    "install_extensions": false,
+    "cert_file": "",
+    "key_file": ""
   }
 }
