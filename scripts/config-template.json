@@ -76,11 +76,8 @@
   },
   "code_server": {
     "enabled": false,
-    "port": 8443,
-    "bind_address": "127.0.0.1",
+    "port": 18443,
     "password": "auto-generate",
-    "install_extensions": false,
-    "cert_file": "",
-    "key_file": ""
+    "install_extensions": false
   }
 }

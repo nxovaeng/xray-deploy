@@ -15,7 +15,7 @@ if [ -f "$AUTOCONF_FILE" ]; then
 fi
 
 # Create HAProxy frontend configuration
-# Arguments: frontend_port, stats_port, xhttp_enabled, grpc_enabled, trojan_enabled, sub_enabled
+# Arguments: frontend_port, stats_port, xhttp_enabled, grpc_enabled, trojan_enabled, sub_enabled, code_server_enabled
 create_frontend_config() {
     local frontend_port=$1
     local stats_port=$2
@@ -23,12 +23,14 @@ create_frontend_config() {
     local grpc_enabled=$4
     local trojan_enabled=$5
     local sub_enabled=$6
+    local code_server_enabled=$7
     
     # Read domains from autoconf.env (single source of truth)
     local xhttp_domain="${DOMAIN_XHTTP:-}"
     local grpc_domain="${DOMAIN_GRPC:-}"
     local trojan_domain="${DOMAIN_TROJAN:-}"
     local sub_domain="${SUBSCRIPTION_DOMAIN:-}"
+    local code_server_domain="${DOMAIN_CODE_SERVER:-}"
     local stats_user="${HAPROXY_STATS_USER:-admin}"
     local stats_pass="${HAPROXY_STATS_PASSWORD:-}"
     
@@ -43,6 +45,8 @@ create_frontend_config() {
     use_backend trojan_backend if { req_ssl_sni -i ${trojan_domain} }"
     [ "$sub_enabled" = "true" ] && [ -n "$sub_domain" ] && frontend_rules+="
     use_backend subscription_backend if { req_ssl_sni -i ${sub_domain} }"
+    [ "$code_server_enabled" = "true" ] && [ -n "$code_server_domain" ] && frontend_rules+="
+    use_backend code_server_backend if { req_ssl_sni -i ${code_server_domain} }"
     
     cat <<EOF
 frontend https_frontend
@@ -71,16 +75,18 @@ EOF
 }
 
 # Create backend configurations
-# Arguments: xhttp_port, grpc_port, trojan_port, nginx_port, xhttp_enabled, grpc_enabled, trojan_enabled, sub_enabled
+# Arguments: xhttp_port, grpc_port, trojan_port, nginx_port, code_server_port, xhttp_enabled, grpc_enabled, trojan_enabled, sub_enabled, code_server_enabled
 create_backends_config() {
     local xhttp_port=$1
     local grpc_port=$2
     local trojan_port=$3
     local nginx_port=$4
-    local xhttp_enabled=$5
-    local grpc_enabled=$6
-    local trojan_enabled=$7
-    local sub_enabled=$8
+    local code_server_port=$5
+    local xhttp_enabled=$6
+    local grpc_enabled=$7
+    local trojan_enabled=$8
+    local sub_enabled=$9
+    local code_server_enabled=${10}
     
     # Always output reject backend
     cat <<EOF
@@ -132,6 +138,16 @@ backend subscription_backend
     server nginx_sub 127.0.0.1:$nginx_port check inter 30s
 EOF
     fi
+    
+    if [ "$code_server_enabled" = "true" ]; then
+        cat <<EOF
+
+# code-server backend (TCP passthrough - code-server handles TLS)
+backend code_server_backend
+    mode tcp
+    server code_server 127.0.0.1:$code_server_port check inter 30s
+EOF
+    fi
 }
 
 # Generate complete HAProxy configuration
@@ -154,22 +170,26 @@ generate_haproxy_config() {
     local grpc_enabled
     local trojan_enabled
     local sub_enabled
+    local code_server_enabled
     
     xhttp_enabled=$(echo "$config_json" | jq -r '.protocols.xhttp.enabled // false')
     grpc_enabled=$(echo "$config_json" | jq -r '.protocols.grpc.enabled // false')
     trojan_enabled=$(echo "$config_json" | jq -r '.protocols.trojan.enabled // false')
     sub_enabled=$(echo "$config_json" | jq -r '.subscription.enabled // false')
+    code_server_enabled=$(echo "$config_json" | jq -r '.code_server.enabled // false')
     
     # Get protocol ports
     local xhttp_port
     local grpc_port
     local trojan_port
     local nginx_port
+    local code_server_port
     
     xhttp_port=$(echo "$config_json" | jq -r '.protocols.xhttp.port // 8443')
     grpc_port=$(echo "$config_json" | jq -r '.protocols.grpc.port // 2083')
     trojan_port=$(echo "$config_json" | jq -r '.protocols.trojan.port // 2087')
     nginx_port=$(echo "$config_json" | jq -r '.subscription.nginx_port // 2096')
+    code_server_port=$(echo "$config_json" | jq -r '.code_server.port // 8443')
     
     # Domains are read directly from autoconf.env in create_frontend_config()
     
@@ -203,9 +223,9 @@ defaults
     timeout client  50000
     timeout server  50000
 
-$(create_frontend_config "$frontend_port" "$stats_port" "$xhttp_enabled" "$grpc_enabled" "$trojan_enabled" "$sub_enabled")
+$(create_frontend_config "$frontend_port" "$stats_port" "$xhttp_enabled" "$grpc_enabled" "$trojan_enabled" "$sub_enabled" "$code_server_enabled")
 
-$(create_backends_config "$xhttp_port" "$grpc_port" "$trojan_port" "$nginx_port" "$xhttp_enabled" "$grpc_enabled" "$trojan_enabled" "$sub_enabled")
+$(create_backends_config "$xhttp_port" "$grpc_port" "$trojan_port" "$nginx_port" "$code_server_port" "$xhttp_enabled" "$grpc_enabled" "$trojan_enabled" "$sub_enabled" "$code_server_enabled")
 EOF
     
     # NOTE: Previously this script wrote a separate "$AUTOCONF_DIR/haproxy_env" file

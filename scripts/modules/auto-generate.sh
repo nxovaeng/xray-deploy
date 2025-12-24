@@ -95,6 +95,7 @@ generate() {
     local grpc_enabled=$(echo "$config_json" | jq -r '.protocols.grpc.enabled // false')
     local trojan_enabled=$(echo "$config_json" | jq -r '.protocols.trojan.enabled // false')
     local sub_enabled=$(echo "$config_json" | jq -r '.subscription.enabled // false')
+    local code_server_enabled=$(echo "$config_json" | jq -r '.code_server.enabled // false')
     
     # 生成变量
     local uuid_reality=$(generate_uuid)
@@ -105,11 +106,13 @@ generate() {
     local password_trojan=$(echo "$config_json" | jq -r '.uuids.trojan_password // "auto-generate"')
     local haproxy_stats_password=$(echo "$config_json" | jq -r '.haproxy.stats_password // "auto-generate"')
     local subscription_password=$(echo "$config_json" | jq -r '.subscription.login_password // "auto-generate"')
+    local code_server_password=$(echo "$config_json" | jq -r '.code_server.password // "auto-generate"')
     
     # 生成缺失的密码
     [ "$password_trojan" = "null" ] || [ "$password_trojan" = "auto-generate" ] && password_trojan=$(generate_password)
     [ "$haproxy_stats_password" = "null" ] || [ "$haproxy_stats_password" = "auto-generate" ] && haproxy_stats_password=$(generate_password)
     [ "$subscription_password" = "null" ] || [ "$subscription_password" = "auto-generate" ] && subscription_password=$(generate_password)
+    [ "$code_server_password" = "null" ] || [ "$code_server_password" = "auto-generate" ] && code_server_password=$(generate_password)
     
     # Reality 密钥 - 始终生成，即使 Reality 未启用，方便后续启用
     local reality_keys=""
@@ -139,10 +142,12 @@ generate() {
     local domain_xhttp=""
     local domain_grpc=""
     local domain_trojan=""
+    local domain_code_server=""
     if [ -n "$wildcard_base" ]; then
         domain_xhttp="$(generate_subdomain).${wildcard_base}"
         domain_grpc="$(generate_subdomain).${wildcard_base}"
         domain_trojan="$(generate_subdomain).${wildcard_base}"
+        domain_code_server="code.${wildcard_base}"  # 固定子域名
     fi
     local subscription_domain=$(echo "$config_json" | jq -r '.domains.subscription // ""')
     
@@ -174,6 +179,7 @@ UUID_GRPC=$uuid_grpc
 TROJAN_PASSWORD=$password_trojan
 HAPROXY_STATS_PASSWORD=$haproxy_stats_password
 SUBSCRIPTION_PASSWORD=$subscription_password
+CODE_SERVER_PASSWORD=$code_server_password
 
 # Reality Keys
 REALITY_KEYS=$reality_keys
@@ -186,6 +192,7 @@ REALITY_SHORT_ID2=$reality_short_id2
 DOMAIN_XHTTP=$domain_xhttp
 DOMAIN_GRPC=$domain_grpc
 DOMAIN_TROJAN=$domain_trojan
+DOMAIN_CODE_SERVER=$domain_code_server
 SUBSCRIPTION_DOMAIN=$subscription_domain
 WILDCARD_BASE=$wildcard_base
 
