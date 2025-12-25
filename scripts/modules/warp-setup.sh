@@ -31,17 +31,17 @@ install_wgcf() {
     # Download latest wgcf
     local arch="amd64"
     [ "$(uname -m)" = "aarch64" ] && arch="arm64"
-    [ "$(uname -m)" = "armv7l" ] && arch="arm"
+    [ "$(uname -m)" = "armv7l" ] && arch="armv7"
     
     local os=$(uname -s | tr '[:upper:]' '[:lower:]')
-    local download_url="https://github.com/ViRb3/wgcf/releases/latest/download/wgcf_${os}_${arch}"
+    local version="2.2.29"  # Latest stable version
+    local download_url="https://github.com/ViRb3/wgcf/releases/download/v${version}/wgcf_${version}_${os}_${arch}"
     
-    echo -e "${YELLOW}Downloading wgcf from: $download_url${NC}"
+    echo -e "${YELLOW}Downloading wgcf v${version} from: $download_url${NC}"
     
     if wget -q -O /usr/local/bin/wgcf "$download_url"; then
         chmod +x /usr/local/bin/wgcf
         echo -e "${GREEN}✓ wgcf installed successfully${NC}"
-        wgcf --version 2>&1 | head -n1
     else
         echo -e "${RED}✗ Failed to download wgcf${NC}"
         return 1
@@ -70,15 +70,15 @@ setup_wgcf_config() {
         echo -e "${GREEN}WARP account already registered${NC}"
     fi
     
-    # Apply license key if provided
+    # Apply license key if provided (upgrade to WARP+)
     if [ -n "$license_key" ] && [ "$license_key" != "null" ]; then
         echo -e "${YELLOW}Applying WARP+ license key...${NC}"
-        # Update license in config file
-        sed -i "s/license_key = .*/license_key = '${license_key}'/" wgcf-account.toml
-        if wgcf update; then
-            echo -e "${GREEN}✓ WARP+ license applied${NC}"
+        # Use wgcf update with --license-key flag (correct method per wgcf docs)
+        if wgcf update --license-key "$license_key"; then
+            echo -e "${GREEN}✓ WARP+ license applied successfully${NC}"
         else
-            echo -e "${YELLOW}⚠ Failed to apply license, continuing with free tier${NC}"
+            echo -e "${YELLOW}⚠ Failed to apply WARP+ license, continuing with free tier${NC}"
+            echo -e "${YELLOW}  Make sure the license key is valid and not expired${NC}"
         fi
     fi
     
@@ -291,18 +291,23 @@ BindAddress = 127.0.0.1:${wireproxy_port}
 EOF
     
     echo -e "${GREEN}✓ wireproxy config generated${NC}"
+    cat "$wireproxy_config"
+    echo ""
     
-    # Start wireproxy in background
+    # Start wireproxy in background with log output
+    local wireproxy_log="${warp_dir}/wireproxy.log"
     echo -e "${YELLOW}Starting wireproxy on port ${wireproxy_port}...${NC}"
-    wireproxy -c "$wireproxy_config" > /dev/null 2>&1 &
+    wireproxy -c "$wireproxy_config" > "$wireproxy_log" 2>&1 &
     wireproxy_pid=$!
     
-    # Wait for wireproxy to start
-    sleep 3
+    # Wait for wireproxy to start (may need DNS resolution time)
+    sleep 5
     
     # Check if wireproxy is running
     if ! kill -0 "$wireproxy_pid" 2>/dev/null; then
         echo -e "${RED}✗ wireproxy failed to start${NC}"
+        echo -e "${YELLOW}Log output:${NC}"
+        cat "$wireproxy_log" 2>/dev/null || echo "No log available"
         return 1
     fi
     
