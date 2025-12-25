@@ -193,10 +193,19 @@ load_config() {
 }
 
 # Generate auto-configuration variables
+# Argument: force_regenerate (optional)
 generate_auto_config() {
+    local force_flag=""
+    if [ "${FORCE_REGENERATE:-false}" = true ]; then
+        log_warn "Force regenerate mode: all UUIDs/passwords/shortids will be regenerated"
+        force_flag="--force"
+    else
+        log_info "Hot reload mode: preserving existing UUIDs/passwords/shortids"
+    fi
+    
     log_info "Generating auto-configuration variables..."
     
-    if ! "$MODULES_DIR/auto-generate.sh" generate "$CONFIG_FILE"; then
+    if ! "$MODULES_DIR/auto-generate.sh" generate "$CONFIG_FILE" $force_flag; then
         log_error "Failed to generate auto-configuration"
         return 1
     fi
@@ -545,15 +554,23 @@ Options:
   --config FILE         Path to configuration JSON file (required)
   --check-only          Validate configuration without deploying
   --update              Update configuration only (skip installation & certificates)
+  --force               Force regenerate all UUIDs/passwords/shortids (ignore existing)
   --batch FILE          Deploy to multiple servers from servers.json
   --help                Show this help message
+
+Hot Reload:
+  By default, UUIDs/passwords/shortids are preserved across updates.
+  Use --force to regenerate all auto-generated values.
 
 Examples:
   # Initial deployment (install + configure)
   sudo $0 --config my-config.json
   
-  # Update configuration only (faster, skip install/cert phases)
+  # Update configuration only (faster, preserves UUIDs/passwords)
   sudo $0 --config my-config.json --update
+  
+  # Force regenerate all values (new UUIDs, passwords, etc.)
+  sudo $0 --config my-config.json --update --force
   
   # Check configuration only
   sudo $0 --config my-config.json --check-only
@@ -569,6 +586,7 @@ EOF
 CONFIG_FILE=""
 CHECK_ONLY=false
 UPDATE_ONLY=false
+FORCE_REGENERATE=false
 BATCH_FILE=""
 
 while [[ $# -gt 0 ]]; do
@@ -583,6 +601,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --update)
             UPDATE_ONLY=true
+            shift
+            ;;
+        --force)
+            FORCE_REGENERATE=true
             shift
             ;;
         --batch)
