@@ -23,7 +23,7 @@ install_acme() {
     echo -e "${YELLOW}Installing acme.sh...${NC}"
     
     # Install acme.sh with proper flags for root/sudo usage
-    curl https://get.acme.sh | sh -s -- --install-online -m "$email" --home "$acme_home"
+    curl https://get.acme.sh | sh -s sh -s email="$email" --home "$acme_home"
     
     # Create alias for easier access
     export ACME_HOME="$acme_home"
@@ -198,6 +198,7 @@ issue_wildcard_certificate() {
     /root/.acme.sh/acme.sh --home /root/.acme.sh --issue \
         -d "${base_domain}" \
         -d "*.${base_domain}" \
+        --force \
         --dns dns_cf \
         --server letsencrypt \
         --keylength ec-256

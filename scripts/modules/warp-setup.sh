@@ -18,6 +18,32 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
+# ========== Helper Functions for parsing wgcf-profile.conf ==========
+# Get value after '=' sign using awk (more reliable)
+get_wg_value() {
+    local key=$1
+    local file=$2
+    awk -F'= ' "/${key}/{print \$2; exit}" "$file" | tr -d '\r'
+}
+
+# Get IPv4 address from Address field (handles "ipv4, ipv6" format)
+get_wg_address_v4() {
+    local file=$1
+    get_wg_value "Address" "$file" | tr ',' '\n' | sed 's/^[[:space:]]*//' | grep -E '^[0-9]+\.[0-9]+' | head -n1
+}
+
+# Get IPv6 address from Address field
+get_wg_address_v6() {
+    local file=$1
+    get_wg_value "Address" "$file" | tr ',' '\n' | sed 's/^[[:space:]]*//' | grep -E '^[0-9a-fA-F]+:' | head -n1
+}
+
+# Get DNS IPv4
+get_wg_dns_v4() {
+    local file=$1
+    get_wg_value "DNS" "$file" | tr ',' '\n' | sed 's/^[[:space:]]*//' | grep -E '^[0-9]+\.[0-9]+' | head -n1
+}
+
 # Install wgcf (WireGuard Cloudflare WARP)
 install_wgcf() {
     echo -e "${YELLOW}Installing wgcf...${NC}"
@@ -97,22 +123,22 @@ setup_wgcf_config() {
         return 1
     fi
     
-    # Extract configuration values
-    local private_key
-    local address_v4
-    local address_v6
-    local public_key
-    local endpoint
-    
-    private_key=$(grep "PrivateKey" wgcf-profile.conf | cut -d' ' -f3)
-    address_v4=$(grep "Address" wgcf-profile.conf | cut -d' ' -f3 | cut -d',' -f1)
-    address_v6=$(grep "Address" wgcf-profile.conf | cut -d' ' -f3 | cut -d',' -f2 | tr -d ' ')
-    public_key=$(grep "PublicKey" wgcf-profile.conf | cut -d' ' -f3)
-    endpoint=$(grep "Endpoint" wgcf-profile.conf | cut -d' ' -f3)
+    # Extract configuration values using helper functions
+    local wg_config="wgcf-profile.conf"
+    local private_key=$(get_wg_value "PrivateKey" "$wg_config")
+    local address_v4=$(get_wg_address_v4 "$wg_config")
+    local address_v6=$(get_wg_address_v6 "$wg_config")
+    local public_key=$(get_wg_value "PublicKey" "$wg_config")
+    local endpoint=$(get_wg_value "Endpoint" "$wg_config")
     
     # Validate extracted values
     if [ -z "$private_key" ] || [ -z "$address_v4" ] || [ -z "$public_key" ] || [ -z "$endpoint" ]; then
         echo -e "${RED}✗ Failed to extract configuration values${NC}"
+        echo "  PrivateKey: ${private_key:-MISSING}"
+        echo "  Address v4: ${address_v4:-MISSING}"
+        echo "  Address v6: ${address_v6:-MISSING}"
+        echo "  PublicKey: ${public_key:-MISSING}"
+        echo "  Endpoint: ${endpoint:-MISSING}"
         return 1
     fi
     
@@ -262,22 +288,21 @@ test_warp_connection() {
         }
     fi
     
-    # Generate wireproxy config from wgcf profile
+    # Generate wireproxy config from wgcf profile using helper functions
     echo -e "${YELLOW}Generating wireproxy configuration...${NC}"
     
-    # Extract values from wgcf-profile.conf
-    local private_key=$(grep "PrivateKey" "$wg_config" | cut -d' ' -f3)
-    local addresses=$(grep "Address" "$wg_config" | cut -d' ' -f3)
-    local dns=$(grep "DNS" "$wg_config" | cut -d' ' -f3 | head -n1)
-    local public_key=$(grep "PublicKey" "$wg_config" | cut -d' ' -f3)
-    local endpoint=$(grep "Endpoint" "$wg_config" | cut -d' ' -f3)
+    local private_key=$(get_wg_value "PrivateKey" "$wg_config")
+    local address_ipv4=$(get_wg_address_v4 "$wg_config")
+    local dns_ipv4=$(get_wg_dns_v4 "$wg_config")
+    local public_key=$(get_wg_value "PublicKey" "$wg_config")
+    local endpoint=$(get_wg_value "Endpoint" "$wg_config")
     
     # Create wireproxy config
     cat > "$wireproxy_config" <<EOF
 [Interface]
 PrivateKey = $private_key
-Address = $addresses
-DNS = ${dns:-1.1.1.1}
+Address = $address_ipv4
+DNS = ${dns_ipv4:-1.1.1.1}
 MTU = 1420
 
 [Peer]
@@ -323,28 +348,23 @@ EOF
     kill "$wireproxy_pid" 2>/dev/null
     wait "$wireproxy_pid" 2>/dev/null
     
+    # Debug: show raw result
+    echo -e "${YELLOW}Curl result:${NC}"
+    echo "$test_result"
+    echo ""
+    
     # Check results
     if echo "$test_result" | grep -q "warp=on"; then
         echo -e "${GREEN}✓ WARP is working!${NC}"
-        echo ""
-        echo -e "${YELLOW}Connection details:${NC}"
-        echo "$test_result"
         return 0
     elif echo "$test_result" | grep -q "warp=plus"; then
         echo -e "${GREEN}✓ WARP+ is working!${NC}"
-        echo ""
-        echo -e "${YELLOW}Connection details:${NC}"
-        echo "$test_result"
         return 0
     elif echo "$test_result" | grep -q "warp=off"; then
         echo -e "${YELLOW}⚠ Connection successful but WARP is off${NC}"
-        echo ""
-        echo -e "${YELLOW}Connection details:${NC}"
-        echo "$test_result"
         return 1
     else
         echo -e "${RED}✗ WARP connection test failed${NC}"
-        echo "Test result: $test_result"
         return 1
     fi
 }

@@ -274,7 +274,11 @@ setup_warp() {
     
     if [ "$warp_enabled" = "true" ]; then
         log_info "Setting up Cloudflare WARP..."
-        "$MODULES_DIR/warp-setup.sh" "$CONFIG_FILE"
+        if "$MODULES_DIR/warp-setup.sh" "$CONFIG_FILE"; then
+            log_success "WARP setup completed"
+        else
+            log_warn "WARP setup failed, continuing without WARP outbound"
+        fi
     fi
 }
 
@@ -282,7 +286,11 @@ setup_warp() {
 generate_subscription() {
     log_info "Generating subscription URLs..."
     
-    "$MODULES_DIR/nginx-subscription.sh" "$CONFIG_FILE" "$SERVER_IP"
+    if "$MODULES_DIR/nginx-subscription.sh" "$CONFIG_FILE" "$SERVER_IP"; then
+        log_success "Subscription setup completed"
+    else
+        log_warn "Subscription setup failed, continuing..."
+    fi
 }
 
 # Setup code-server (optional)
@@ -292,7 +300,11 @@ setup_code_server() {
     
     if [ "$code_server_enabled" = "true" ]; then
         log_info "Setting up code-server..."
-        "$MODULES_DIR/code-server-setup.sh" "$CONFIG_FILE"
+        if "$MODULES_DIR/code-server-setup.sh" "$CONFIG_FILE"; then
+            log_success "code-server setup completed"
+        else
+            log_warn "code-server setup failed, continuing..."
+        fi
     fi
 }
 
