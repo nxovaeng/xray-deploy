@@ -1,6 +1,6 @@
 #!/bin/bash
 # HAProxy Configuration Generator Module
-# SNI-based routing for multiple protocols
+# SNI-based routing for XHTTP, gRPC, WARP, Subscription, code-server
 # 从 autoconf.env 读取所有变量，仅负责配置生成
 
 set -euo pipefail
@@ -14,39 +14,44 @@ if [ -f "$AUTOCONF_FILE" ]; then
     source "$AUTOCONF_FILE"
 fi
 
+# Port variables are read from autoconf.env:
+# PORT_XHTTP, PORT_GRPC, PORT_WARP_XHTTP, PORT_NGINX, PORT_CODE_SERVER, PORT_HAPROXY_STATS
+
 # Create HAProxy frontend configuration
-# Arguments: frontend_port, stats_port, xhttp_enabled, grpc_enabled, trojan_enabled, sub_enabled, code_server_enabled
 create_frontend_config() {
     local frontend_port=$1
-    local stats_port=$2
-    local xhttp_enabled=$3
-    local grpc_enabled=$4
-    local trojan_enabled=$5
-    local sub_enabled=$6
-    local code_server_enabled=$7
+    local xhttp_enabled=$2
+    local grpc_enabled=$3
+    local sub_enabled=$4
+    local code_server_enabled=$5
+    local warp_enabled=$6
+    local proton_enabled=$7
     
-    # Read domains from autoconf.env (single source of truth)
+    # Read domains from autoconf.env
     local xhttp_domain="${DOMAIN_XHTTP:-}"
     local grpc_domain="${DOMAIN_GRPC:-}"
-    local trojan_domain="${DOMAIN_TROJAN:-}"
     local sub_domain="${SUBSCRIPTION_DOMAIN:-}"
     local code_server_domain="${DOMAIN_CODE_SERVER:-}"
+    local warp_domain="${DOMAIN_WARP:-}"
+    local proton_domain="${DOMAIN_PROTON:-}"
     local stats_user="${HAPROXY_STATS_USER:-admin}"
     local stats_pass="${HAPROXY_STATS_PASSWORD:-}"
     
     local frontend_rules=""
     
-    # Build SNI routing rules only for enabled protocols (use actual values)
+    # Build SNI routing rules
     [ "$xhttp_enabled" = "true" ] && [ -n "$xhttp_domain" ] && frontend_rules+="
     use_backend xhttp_backend if { req_ssl_sni -i ${xhttp_domain} }"
     [ "$grpc_enabled" = "true" ] && [ -n "$grpc_domain" ] && frontend_rules+="
     use_backend grpc_backend if { req_ssl_sni -i ${grpc_domain} }"
-    [ "$trojan_enabled" = "true" ] && [ -n "$trojan_domain" ] && frontend_rules+="
-    use_backend trojan_backend if { req_ssl_sni -i ${trojan_domain} }"
     [ "$sub_enabled" = "true" ] && [ -n "$sub_domain" ] && frontend_rules+="
     use_backend subscription_backend if { req_ssl_sni -i ${sub_domain} }"
     [ "$code_server_enabled" = "true" ] && [ -n "$code_server_domain" ] && frontend_rules+="
     use_backend code_server_backend if { req_ssl_sni -i ${code_server_domain} }"
+    [ "$warp_enabled" = "true" ] && [ -n "$warp_domain" ] && frontend_rules+="
+    use_backend warp_backend if { req_ssl_sni -i ${warp_domain} }"
+    [ "$proton_enabled" = "true" ] && [ -n "$proton_domain" ] && frontend_rules+="
+    use_backend proton_backend if { req_ssl_sni -i ${proton_domain} }"
     
     cat <<EOF
 frontend https_frontend
@@ -57,15 +62,15 @@ frontend https_frontend
     tcp-request inspect-delay 5s
     tcp-request content accept if { req_ssl_hello_type 1 }
     
-    # SNI-based routing (only for enabled protocols)${frontend_rules}
+    # SNI-based routing${frontend_rules}
     
-    # Reject unknown SNI (Reality uses separate port, not through HAProxy)
+    # Reject unknown SNI
     default_backend reject_backend
 
-# Stats interface (dual-stack)
+# Stats interface (localhost only)
 frontend stats
-    bind 127.0.0.1:$stats_port
-    bind [::1]:$stats_port
+    bind 127.0.0.1:$PORT_HAPROXY_STATS
+    bind [::1]:$PORT_HAPROXY_STATS
     mode http
     stats enable
     stats uri /stats
@@ -75,20 +80,14 @@ EOF
 }
 
 # Create backend configurations
-# Arguments: xhttp_port, grpc_port, trojan_port, nginx_port, code_server_port, xhttp_enabled, grpc_enabled, trojan_enabled, sub_enabled, code_server_enabled
 create_backends_config() {
-    local xhttp_port=$1
-    local grpc_port=$2
-    local trojan_port=$3
-    local nginx_port=$4
-    local code_server_port=$5
-    local xhttp_enabled=$6
-    local grpc_enabled=$7
-    local trojan_enabled=$8
-    local sub_enabled=$9
-    local code_server_enabled=${10}
+    local xhttp_enabled=$1
+    local grpc_enabled=$2
+    local sub_enabled=$3
+    local code_server_enabled=$4
+    local warp_enabled=$5
+    local proton_enabled=$6
     
-    # Always output reject backend
     cat <<EOF
 
 # Reject backend for unknown SNI
@@ -98,54 +97,63 @@ backend reject_backend
     server reject 127.0.0.1:1 send-proxy
 EOF
     
-    # Conditionally output backends
     if [ "$xhttp_enabled" = "true" ]; then
         cat <<EOF
 
-# XHTTP backend (TCP passthrough - Xray handles TLS)
+# XHTTP backend
 backend xhttp_backend
     mode tcp
-    server xray_xhttp 127.0.0.1:$xhttp_port check inter 30s
+    server xray_xhttp 127.0.0.1:$PORT_XHTTP check inter 30s
 EOF
     fi
     
     if [ "$grpc_enabled" = "true" ]; then
         cat <<EOF
 
-# gRPC backend (TCP passthrough - Xray handles TLS)
+# gRPC backend
 backend grpc_backend
     mode tcp
-    server xray_grpc 127.0.0.1:$grpc_port check inter 30s
-EOF
-    fi
-    
-    if [ "$trojan_enabled" = "true" ]; then
-        cat <<EOF
-
-# Trojan backend (TCP passthrough - Xray handles TLS)
-backend trojan_backend
-    mode tcp
-    server xray_trojan 127.0.0.1:$trojan_port check inter 30s
+    server xray_grpc 127.0.0.1:$PORT_GRPC check inter 30s
 EOF
     fi
     
     if [ "$sub_enabled" = "true" ]; then
         cat <<EOF
 
-# Subscription backend (TCP passthrough - Nginx handles TLS)
+# Subscription backend
 backend subscription_backend
     mode tcp
-    server nginx_sub 127.0.0.1:$nginx_port check inter 30s
+    server nginx_sub 127.0.0.1:$PORT_NGINX check inter 30s
 EOF
     fi
     
     if [ "$code_server_enabled" = "true" ]; then
         cat <<EOF
 
-# code-server backend (TCP passthrough - code-server handles TLS)
+# code-server backend
 backend code_server_backend
     mode tcp
-    server code_server 127.0.0.1:$code_server_port check inter 30s
+    server code_server 127.0.0.1:$PORT_CODE_SERVER check inter 30s
+EOF
+    fi
+    
+    if [ "$warp_enabled" = "true" ]; then
+        cat <<EOF
+
+# WARP XHTTP backend
+backend warp_backend
+    mode tcp
+    server xray_warp 127.0.0.1:$PORT_WARP_XHTTP check inter 30s
+EOF
+    fi
+    
+    if [ "$proton_enabled" = "true" ]; then
+        cat <<EOF
+
+# Proton VPN XHTTP backend
+backend proton_backend
+    mode tcp
+    server xray_proton 127.0.0.1:$PORT_PROTON_XHTTP check inter 30s
 EOF
     fi
 }
@@ -155,45 +163,16 @@ generate_haproxy_config() {
     local config_json=$1
     
     # Parse configuration
-    local frontend_port
-    local stats_port
-    local stats_user
-    local stats_pass
+    local frontend_port=$(echo "$config_json" | jq -r '.haproxy.frontend_port // 443')
     
-    frontend_port=$(echo "$config_json" | jq -r '.haproxy.frontend_port // 443')
-    stats_port=$(echo "$config_json" | jq -r '.haproxy.stats_port // 2053')
-    local stats_user="$HAPROXY_STATS_USER"
-    local stats_pass="$HAPROXY_STATS_PASSWORD"
+    # Get enabled states
+    local xhttp_enabled=$(echo "$config_json" | jq -r '.protocols.xhttp.enabled // true')
+    local grpc_enabled=$(echo "$config_json" | jq -r '.protocols.grpc.enabled // true')
+    local sub_enabled=$(echo "$config_json" | jq -r '.subscription.enabled // false')
+    local code_server_enabled=$(echo "$config_json" | jq -r '.code_server.enabled // false')
+    local warp_enabled=$(echo "$config_json" | jq -r '.warp_outbound.enabled // false')
+    local proton_enabled=$(echo "$config_json" | jq -r '.proton_outbound.enabled // false')
     
-    # Get protocol enabled states
-    local xhttp_enabled
-    local grpc_enabled
-    local trojan_enabled
-    local sub_enabled
-    local code_server_enabled
-    
-    xhttp_enabled=$(echo "$config_json" | jq -r '.protocols.xhttp.enabled // false')
-    grpc_enabled=$(echo "$config_json" | jq -r '.protocols.grpc.enabled // false')
-    trojan_enabled=$(echo "$config_json" | jq -r '.protocols.trojan.enabled // false')
-    sub_enabled=$(echo "$config_json" | jq -r '.subscription.enabled // false')
-    code_server_enabled=$(echo "$config_json" | jq -r '.code_server.enabled // false')
-    
-    # Get protocol ports
-    local xhttp_port
-    local grpc_port
-    local trojan_port
-    local nginx_port
-    local code_server_port
-    
-    xhttp_port=$(echo "$config_json" | jq -r '.protocols.xhttp.port // 8443')
-    grpc_port=$(echo "$config_json" | jq -r '.protocols.grpc.port // 2083')
-    trojan_port=$(echo "$config_json" | jq -r '.protocols.trojan.port // 2087')
-    nginx_port=$(echo "$config_json" | jq -r '.subscription.nginx_port // 2096')
-    code_server_port=$(echo "$config_json" | jq -r '.code_server.port // 8443')
-    
-    # Domains are read directly from autoconf.env in create_frontend_config()
-    
-    # Generate configuration
     cat <<EOF
 global
     log /dev/log local0
@@ -205,11 +184,7 @@ global
     group haproxy
     daemon
     
-    # Default SSL material locations
-    ca-base /etc/ssl/certs
-    crt-base /etc/ssl/private
-    
-    # Increase buffer size for better performance
+    # Performance tuning
     tune.bufsize 32768
     tune.maxrewrite 1024
     tune.ssl.default-dh-param 2048
@@ -223,16 +198,10 @@ defaults
     timeout client  50000
     timeout server  50000
 
-$(create_frontend_config "$frontend_port" "$stats_port" "$xhttp_enabled" "$grpc_enabled" "$trojan_enabled" "$sub_enabled" "$code_server_enabled")
+$(create_frontend_config "$frontend_port" "$xhttp_enabled" "$grpc_enabled" "$sub_enabled" "$code_server_enabled" "$warp_enabled" "$proton_enabled")
 
-$(create_backends_config "$xhttp_port" "$grpc_port" "$trojan_port" "$nginx_port" "$code_server_port" "$xhttp_enabled" "$grpc_enabled" "$trojan_enabled" "$sub_enabled" "$code_server_enabled")
+$(create_backends_config "$xhttp_enabled" "$grpc_enabled" "$sub_enabled" "$code_server_enabled" "$warp_enabled" "$proton_enabled")
 EOF
-    
-    # NOTE: Previously this script wrote a separate "$AUTOCONF_DIR/haproxy_env" file
-    # for downstream consumption. That is redundant: all auto-generated variables
-    # are centralized in "$AUTOCONF_FILE" (autoconf.env). Other modules read
-    # DOMAIN_* and HAPROXY_STATS_* from autoconf.env directly.
-    # No additional file is written here to avoid duplication.
 }
 
 # Main execution

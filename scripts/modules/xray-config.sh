@@ -1,6 +1,6 @@
 #!/bin/bash
 # Xray Configuration Generator Module
-# Supports: Reality, XHTTP, gRPC, Trojan protocols
+# Supports: XHTTP, gRPC protocols
 # 从 autoconf.env 读取所有变量，仅负责配置生成
 
 set -euo pipefail
@@ -14,57 +14,15 @@ if [ -f "$AUTOCONF_FILE" ]; then
     source "$AUTOCONF_FILE"
 fi
 
-# Create Xray inbound configuration for Reality
-create_reality_inbound() {
-    local uuid=$1
-    local port=$2
-    local dest=$3
-    local server_names=$4  # JSON array string
-    local private_key=$5
-    local public_key=$6
-    local short_id=$7
-    local short_id2=$8
-    
-    cat <<EOF
-{
-  "tag": "vless-reality",
-  "port": $port,
-  "listen": "::",
-  "protocol": "vless",
-  "settings": {
-    "clients": [
-      {
-        "id": "$uuid",
-        "flow": "xtls-rprx-vision"
-      }
-    ],
-    "decryption": "none"
-  },
-  "streamSettings": {
-    "network": "tcp",
-    "security": "reality",
-    "realitySettings": {
-      "dest": "$dest",
-      "serverNames": $server_names,
-      "privateKey": "$private_key",
-      "shortIds": ["$short_id", "$short_id2"]
-    }
-  },
-  "sniffing": {
-    "enabled": true,
-    "destOverride": ["http", "tls", "quic"],
-    "routeOnly": true
-  }
-}
-EOF
-}
+# Port variables are read from autoconf.env:
+# PORT_XHTTP, PORT_GRPC, PORT_WARP_XHTTP, PORT_PROTON_XHTTP
 
 # Create Xray inbound configuration for XHTTP
 create_xhttp_inbound() {
     local uuid=$1
-    local port=$2
-    local path=$3
-    local domain=$4
+    local path=$2
+    local domain=$3
+    local port=${4:-$PORT_XHTTP}
     local cert_dir="/etc/xray/cert"
     
     cat <<EOF
@@ -99,11 +57,6 @@ create_xhttp_inbound() {
       "path": "$path",
       "mode": "auto"
     }
-  },
-  "sniffing": {
-    "enabled": true,
-    "destOverride": ["http", "tls", "quic"],
-    "routeOnly": true
   }
 }
 EOF
@@ -112,9 +65,9 @@ EOF
 # Create Xray inbound configuration for gRPC
 create_grpc_inbound() {
     local uuid=$1
-    local port=$2
-    local service_name=$3
-    local domain=$4
+    local service_name=$2
+    local domain=$3
+    local port=${4:-$PORT_GRPC}
     local cert_dir="/etc/xray/cert"
     
     cat <<EOF
@@ -148,39 +101,36 @@ create_grpc_inbound() {
       "multiMode": false,
       "initial_windows_size": 65536
     }
-  },
-  "sniffing": {
-    "enabled": true,
-    "destOverride": ["http", "tls", "quic"],
-    "routeOnly": true
   }
 }
 EOF
 }
 
-# Create Xray inbound configuration for Trojan
-create_trojan_inbound() {
-    local password=$1
-    local port=$2
+# Create WARP dedicated XHTTP inbound (for SOCKS5 outbound routing)
+create_warp_xhttp_inbound() {
+    local uuid=$1
+    local path=$2
     local domain=$3
+    local port=${4:-$PORT_WARP_XHTTP}
     local cert_dir="/etc/xray/cert"
     
     cat <<EOF
 {
-  "tag": "trojan-tcp",
+  "tag": "warp-xhttp",
   "port": $port,
   "listen": "::",
-  "protocol": "trojan",
+  "protocol": "vless",
   "settings": {
     "clients": [
       {
-        "password": "$password",
-        "email": "user@trojan"
+        "id": "$uuid",
+        "flow": ""
       }
-    ]
+    ],
+    "decryption": "none"
   },
   "streamSettings": {
-    "network": "tcp",
+    "network": "xhttp",
     "security": "tls",
     "tlsSettings": {
       "certificates": [
@@ -189,12 +139,58 @@ create_trojan_inbound() {
           "keyFile": "${cert_dir}/privkey.pem"
         }
       ],
-      "alpn": ["http/1.1"]
+      "alpn": ["h2", "http/1.1"],
+      "serverName": "$domain"
+    },
+    "xhttpSettings": {
+      "path": "$path",
+      "mode": "auto"
     }
+  }
+}
+EOF
+}
+
+# Create Proton VPN dedicated XHTTP inbound (for SOCKS5 outbound routing)
+create_proton_xhttp_inbound() {
+    local uuid=$1
+    local path=$2
+    local domain=$3
+    local port=${4:-$PORT_PROTON_XHTTP}
+    local cert_dir="/etc/xray/cert"
+    
+    cat <<EOF
+{
+  "tag": "proton-xhttp",
+  "port": $port,
+  "listen": "::",
+  "protocol": "vless",
+  "settings": {
+    "clients": [
+      {
+        "id": "$uuid",
+        "flow": ""
+      }
+    ],
+    "decryption": "none"
   },
-  "sniffing": {
-    "enabled": true,
-    "destOverride": ["http", "tls"]
+  "streamSettings": {
+    "network": "xhttp",
+    "security": "tls",
+    "tlsSettings": {
+      "certificates": [
+        {
+          "certificateFile": "${cert_dir}/fullchain.pem",
+          "keyFile": "${cert_dir}/privkey.pem"
+        }
+      ],
+      "alpn": ["h2", "http/1.1"],
+      "serverName": "$domain"
+    },
+    "xhttpSettings": {
+      "path": "$path",
+      "mode": "auto"
+    }
   }
 }
 EOF
@@ -203,163 +199,105 @@ EOF
 # Create Xray outbound configuration
 create_outbound_config() {
     local warp_enabled=$1
+    local proton_enabled=$2
+    local warp_socks_address=${3:-127.0.0.1}
+    local warp_socks_port=${4:-25344}
+    local proton_socks_address=${5:-127.0.0.1}
+    local proton_socks_port=${6:-25345}
     
-    if [ "$warp_enabled" = "true" ]; then
-        cat <<EOF
+    cat <<EOF
 [
   {
     "tag": "direct",
     "protocol": "freedom",
     "settings": {}
   },
+EOF
+
+    if [ "$warp_enabled" = "true" ]; then
+        cat <<EOF
   {
     "tag": "warp",
-    "protocol": "wireguard",
+    "protocol": "socks",
     "settings": {
-      "secretKey": "WARP_PRIVATE_KEY",
-      "address": ["172.16.0.2/32", "2606:4700:110:8::1/128"],
-      "peers": [
+      "servers": [
         {
-          "publicKey": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
-          "endpoint": "engage.cloudflareclient.com:2408"
+          "address": "$warp_socks_address",
+          "port": $warp_socks_port
         }
       ]
     }
   },
-  {
-    "tag": "block",
-    "protocol": "blackhole",
-    "settings": {}
-  }
-]
-EOF
-    else
-        cat <<EOF
-[
-  {
-    "tag": "direct",
-    "protocol": "freedom",
-    "settings": {}
-  },
-  {
-    "tag": "block",
-    "protocol": "blackhole",
-    "settings": {}
-  }
-]
 EOF
     fi
+
+    if [ "$proton_enabled" = "true" ]; then
+        cat <<EOF
+  {
+    "tag": "proton",
+    "protocol": "socks",
+    "settings": {
+      "servers": [
+        {
+          "address": "$proton_socks_address",
+          "port": $proton_socks_port
+        }
+      ]
+    }
+  },
+EOF
+    fi
+
+    cat <<EOF
+  {
+    "tag": "block",
+    "protocol": "blackhole",
+    "settings": {}
+  }
+]
+EOF
 }
 
 # Create routing rules
 create_routing_rules() {
     local warp_enabled=$1
-    local routing_mode=$2
-    local block_bt=$3
+    local proton_enabled=$2
+    local routing_mode=${3:-selective}
+    local block_bt=${4:-false}
     
-    # Default values
-    [ -z "$routing_mode" ] && routing_mode="selective"
-    [ -z "$block_bt" ] && block_bt="false"
+    local rules_json=""
     
-    if [ "$warp_enabled" = "true" ]; then
-        # Build rules array based on mode
-        local rules_json=""
-        
-        # Common blocking rules (always first)
-        rules_json+='{
-      "type": "field",
-      "ip": ["geoip:private"],
-      "outboundTag": "block"
-    },
-    {
-      "type": "field",
-      "domain": ["geosite:category-ads"],
-      "outboundTag": "block"
-    }'
-        
-        # BT protocol blocking (if enabled)
-        if [ "$block_bt" = "true" ]; then
-            rules_json+=',
-    {
-      "type": "field",
-      "protocol": ["bittorrent"],
-      "outboundTag": "block"
-    }'
-        fi
-        
-        # Routing mode-specific rules
-        if [ "$routing_mode" = "selective" ]; then
-            # Selective mode: CN IPs/domains + streaming → WARP, others → direct
-            rules_json+=',
-    {
-      "type": "field",
-      "ip": ["geoip:cn"],
-      "outboundTag": "warp"
-    },
-    {
-      "type": "field",
-      "domain": ["geosite:cn"],
-      "outboundTag": "warp"
-    },
-    {
-      "type": "field",
-      "domain": ["geosite:netflix", "geosite:disney", "geosite:hbo", "geosite:spotify"],
-      "outboundTag": "warp"
-    },
-    {
-      "type": "field",
-      "network": "tcp,udp",
-      "outboundTag": "direct"
-    }'
-        elif [ "$routing_mode" = "all" ]; then
-            # All mode: everything → WARP
-            rules_json+=',
-    {
-      "type": "field",
-      "network": "tcp,udp",
-      "outboundTag": "warp"
-    }'
-        fi
-        
-        cat <<EOF
-{
-  "domainStrategy": "IPIfNonMatch",
-  "rules": [
-    $rules_json
-  ]
-}
-EOF
-    else
-        # WARP disabled: block private IPs and ads only
-        local rules_json='{
-      "type": "field",
-      "ip": ["geoip:private"],
-      "outboundTag": "block"
-    },
-    {
-      "type": "field",
-      "domain": ["geosite:category-ads"],
-      "outboundTag": "block"
-    }'
-        
-        if [ "$block_bt" = "true" ]; then
-            rules_json+=',
-    {
-      "type": "field",
-      "protocol": ["bittorrent"],
-      "outboundTag": "block"
-    }'
-        fi
-        
-        cat <<EOF
-{
-  "domainStrategy": "IPIfNonMatch",
-  "rules": [
-    $rules_json
-  ]
-}
-EOF
+    # Proton XHTTP inbound → Proton outbound (1:1 direct binding)
+    if [ "$proton_enabled" = "true" ]; then
+        rules_json+='{\n      "type": "field",\n      "inboundTag": ["proton-xhttp"],\n      "outboundTag": "proton"\n    },\n    '
     fi
+    
+    # WARP XHTTP inbound → WARP outbound (1:1 direct binding)
+    if [ "$warp_enabled" = "true" ]; then
+        rules_json+='{\n      "type": "field",\n      "inboundTag": ["warp-xhttp"],\n      "outboundTag": "warp"\n    },\n    '
+    fi
+    
+    # Blocking rules
+    rules_json+='{\n      "type": "field",\n      "ip": ["geoip:private"],\n      "outboundTag": "block"\n    },\n    {\n      "type": "field",\n      "domain": ["geosite:category-ads"],\n      "outboundTag": "block"\n    }'
+    
+    # BT blocking
+    if [ "$block_bt" = "true" ]; then
+        rules_json+=',\n    {\n      "type": "field",\n      "protocol": ["bittorrent"],\n      "outboundTag": "block"\n    }'
+    fi
+    
+    # WARP routing for selective mode
+    if [ "$warp_enabled" = "true" ] && [ "$routing_mode" = "selective" ]; then
+        rules_json+=',\n    {\n      "type": "field",\n      "ip": ["geoip:cn"],\n      "outboundTag": "warp"\n    },\n    {\n      "type": "field",\n      "domain": ["geosite:cn"],\n      "outboundTag": "warp"\n    },\n    {\n      "type": "field",\n      "domain": ["geosite:netflix", "geosite:disney", "geosite:hbo", "geosite:spotify"],\n      "outboundTag": "warp"\n    }'
+    fi
+    
+    cat <<EOF
+{
+  "domainStrategy": "IPIfNonMatch",
+  "rules": [
+    $rules_json
+  ]
+}
+EOF
 }
 
 # Generate complete Xray configuration
@@ -367,34 +305,35 @@ generate_xray_config() {
     local config_json=$1
     
     # Parse configuration
-    local reality_enabled
-    local xhttp_enabled
-    local grpc_enabled
-    local trojan_enabled
-    local warp_enabled
-    local routing_mode
-    local block_bt
+    local xhttp_enabled=$(echo "$config_json" | jq -r '.protocols.xhttp.enabled // true')
+    local grpc_enabled=$(echo "$config_json" | jq -r '.protocols.grpc.enabled // true')
+    local warp_enabled=$(echo "$config_json" | jq -r '.warp_outbound.enabled // false')
+    local proton_enabled=$(echo "$config_json" | jq -r '.proton_outbound.enabled // false')
+    local routing_mode=$(echo "$config_json" | jq -r '.warp_outbound.routing_mode // "selective"')
+    local block_bt=$(echo "$config_json" | jq -r '.warp_outbound.block_bt // false')
     
-    reality_enabled=$(echo "$config_json" | jq -r '.protocols.reality.enabled')
-    xhttp_enabled=$(echo "$config_json" | jq -r '.protocols.xhttp.enabled')
-    grpc_enabled=$(echo "$config_json" | jq -r '.protocols.grpc.enabled')
-    trojan_enabled=$(echo "$config_json" | jq -r '.protocols.trojan.enabled')
-    warp_enabled=$(echo "$config_json" | jq -r '.warp_outbound.enabled')
-    routing_mode=$(echo "$config_json" | jq -r '.warp_outbound.routing_mode // "selective"')
-    block_bt=$(echo "$config_json" | jq -r '.warp_outbound.block_bt // false')
+    # WARP SOCKS5 settings
+    local warp_socks_address=$(echo "$config_json" | jq -r '.warp_outbound.socks_address // "127.0.0.1"')
+    local warp_socks_port=$(echo "$config_json" | jq -r '.warp_outbound.socks_port // 25344')
     
-    # Use UUIDs and credentials from autoconf.env (already generated by auto-generate.sh)
-    local reality_uuid="${UUID_REALITY}"
-    local xhttp_uuid="${UUID_XHTTP}"
-    local grpc_uuid="${UUID_GRPC}"
-    local trojan_password="${TROJAN_PASSWORD}"
-    local reality_private_key="${REALITY_PRIVATE_KEY}"
-    local reality_public_key="${REALITY_PUBLIC_KEY}"
-    local reality_short_id="${REALITY_SHORT_ID}"
-    local reality_short_id2="${REALITY_SHORT_ID2}"
+    # Proton SOCKS5 settings
+    local proton_socks_address=$(echo "$config_json" | jq -r '.proton_outbound.socks_address // "127.0.0.1"')
+    local proton_socks_port=$(echo "$config_json" | jq -r '.proton_outbound.socks_port // 25345')
     
-    # Validate that all required variables are set
-    if [ -z "$reality_uuid" ] || [ -z "$xhttp_uuid" ] || [ -z "$grpc_uuid" ] || [ -z "$trojan_password" ]; then
+    # Read from autoconf.env
+    local xhttp_uuid="${UUID_XHTTP:-}"
+    local grpc_uuid="${UUID_GRPC:-}"
+    local xhttp_path="${XHTTP_PATH:-}"
+    local grpc_service="${GRPC_SERVICE_NAME:-}"
+    local xhttp_domain="${DOMAIN_XHTTP:-}"
+    local grpc_domain="${DOMAIN_GRPC:-}"
+    local warp_domain="${DOMAIN_WARP:-}"
+    local warp_path="${WARP_PATH:-/warp}"
+    local proton_domain="${DOMAIN_PROTON:-}"
+    local proton_path="${PROTON_PATH:-/proton}"
+    
+    # Validate
+    if [ -z "$xhttp_uuid" ] || [ -z "$grpc_uuid" ]; then
         echo "ERROR: Required variables not found in autoconf.env. Run auto-generate.sh first." >&2
         exit 1
     fi
@@ -403,53 +342,27 @@ generate_xray_config() {
     local inbounds="["
     local first=true
     
-    if [ "$reality_enabled" = "true" ]; then
-        local reality_port
-        local reality_dest
-        local reality_sns
-        reality_port=$(echo "$config_json" | jq -r '.protocols.reality.port')
-        reality_dest=$(echo "$config_json" | jq -r '.protocols.reality.dest')
-        reality_sns=$(echo "$config_json" | jq -c '.protocols.reality.server_names')
-        
-        [ "$first" = false ] && inbounds+=","
-        inbounds+=$(create_reality_inbound "$reality_uuid" "$reality_port" "$reality_dest" "$reality_sns" "$reality_private_key" "$reality_public_key" "$reality_short_id" "$reality_short_id2")
-        first=false
-    fi
-    
     if [ "$xhttp_enabled" = "true" ]; then
-        local xhttp_port
-        local xhttp_path
-        local xhttp_domain
-        xhttp_port=$(echo "$config_json" | jq -r '.protocols.xhttp.port')
-        xhttp_path="$XHTTP_PATH"
-        xhttp_domain="$DOMAIN_XHTTP"
-        
         [ "$first" = false ] && inbounds+=","
-        inbounds+=$(create_xhttp_inbound "$xhttp_uuid" "$xhttp_port" "$xhttp_path" "$xhttp_domain")
+        inbounds+=$(create_xhttp_inbound "$xhttp_uuid" "$xhttp_path" "$xhttp_domain")
         first=false
     fi
     
     if [ "$grpc_enabled" = "true" ]; then
-        local grpc_port
-        local grpc_service
-        local grpc_domain
-        grpc_port=$(echo "$config_json" | jq -r '.protocols.grpc.port')
-        grpc_service="$GRPC_SERVICE_NAME"
-        grpc_domain="$DOMAIN_GRPC"
-        
         [ "$first" = false ] && inbounds+=","
-        inbounds+=$(create_grpc_inbound "$grpc_uuid" "$grpc_port" "$grpc_service" "$grpc_domain")
+        inbounds+=$(create_grpc_inbound "$grpc_uuid" "$grpc_service" "$grpc_domain")
         first=false
     fi
     
-    if [ "$trojan_enabled" = "true" ]; then
-        local trojan_port
-        local trojan_domain
-        trojan_port=$(echo "$config_json" | jq -r '.protocols.trojan.port')
-        trojan_domain="$DOMAIN_TROJAN"
-        
+    if [ "$warp_enabled" = "true" ]; then
         [ "$first" = false ] && inbounds+=","
-        inbounds+=$(create_trojan_inbound "$trojan_password" "$trojan_port" "$trojan_domain")
+        inbounds+=$(create_warp_xhttp_inbound "$xhttp_uuid" "$warp_path" "$warp_domain")
+        first=false
+    fi
+    
+    if [ "$proton_enabled" = "true" ]; then
+        [ "$first" = false ] && inbounds+=","
+        inbounds+=$(create_proton_xhttp_inbound "$xhttp_uuid" "$proton_path" "$proton_domain")
         first=false
     fi
     
@@ -464,8 +377,8 @@ generate_xray_config() {
     "error": "/var/log/xray/error.log"
   },
   "inbounds": $inbounds,
-  "outbounds": $(create_outbound_config "$warp_enabled"),
-  "routing": $(create_routing_rules "$warp_enabled" "$routing_mode" "$block_bt")
+  "outbounds": $(create_outbound_config "$warp_enabled" "$proton_enabled" "$warp_socks_address" "$warp_socks_port" "$proton_socks_address" "$proton_socks_port"),
+  "routing": $(create_routing_rules "$warp_enabled" "$proton_enabled" "$routing_mode" "$block_bt")
 }
 EOF
 }

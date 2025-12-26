@@ -23,7 +23,7 @@ install_acme() {
     echo -e "${YELLOW}Installing acme.sh...${NC}"
     
     # Install acme.sh with proper flags for root/sudo usage
-    curl https://get.acme.sh | sh -s sh -s email="$email" --home "$acme_home"
+    curl https://get.acme.sh | sh -s email="$email" --home "$acme_home"
     
     # Create alias for easier access
     export ACME_HOME="$acme_home"
@@ -245,6 +245,7 @@ chmod 644 "$CERT_DIR/haproxy.pem"
 systemctl reload haproxy 2>/dev/null || true
 systemctl restart xray 2>/dev/null || true
 systemctl reload nginx 2>/dev/null || true
+systemctl restart code-server 2>/dev/null || true
 SCRIPT
     chmod +x "$reload_script"
     

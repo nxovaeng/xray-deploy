@@ -1,7 +1,7 @@
 #!/bin/bash
 # Multi-Protocol Proxy Deployment Script
-# Supports: Reality, XHTTP, gRPC, Trojan
-# Version: 1.0.0
+# Supports: XHTTP, gRPC
+# Version: 2.0.0
 
 set -euo pipefail
 
@@ -23,7 +23,7 @@ print_banner() {
 ╔══════════════════════════════════════════════════════════════╗
 ║     Multi-Protocol Proxy Deployment Script                   ║
 ║                                                              ║
-║     Protocols: Reality | XHTTP | gRPC | Trojan               ║
+║     Protocols: XHTTP | gRPC                                  ║
 ║     Features: HAProxy SNI | Auto Certs | WARP                ║
 ╚══════════════════════════════════════════════════════════════╝
 EOF
@@ -344,9 +344,6 @@ start_services() {
 
 # Display deployment summary
 display_summary() {
-    local sub_domain
-    sub_domain=$(echo "$CONFIG_JSON" | jq -r '.domains.subscription')
-    
     echo ""
     echo -e "${GREEN}=====================================${NC}"
     echo -e "${GREEN}Deployment Complete!${NC}"
@@ -359,20 +356,13 @@ display_summary() {
     # Display enabled protocols
     echo "Enabled Protocols:"
     
-    local reality_enabled
-    local xhttp_enabled
-    local grpc_enabled
-    local trojan_enabled
+    local xhttp_enabled=$(echo "$CONFIG_JSON" | jq -r '.protocols.xhttp.enabled // true')
+    local grpc_enabled=$(echo "$CONFIG_JSON" | jq -r '.protocols.grpc.enabled // true')
+    local warp_enabled=$(echo "$CONFIG_JSON" | jq -r '.warp_outbound.enabled // false')
     
-    reality_enabled=$(echo "$CONFIG_JSON" | jq -r '.protocols.reality.enabled')
-    xhttp_enabled=$(echo "$CONFIG_JSON" | jq -r '.protocols.xhttp.enabled')
-    grpc_enabled=$(echo "$CONFIG_JSON" | jq -r '.protocols.grpc.enabled')
-    trojan_enabled=$(echo "$CONFIG_JSON" | jq -r '.protocols.trojan.enabled')
-    
-    [ "$reality_enabled" = "true" ] && echo "  ✓ VLESS-XTLS-Vision-Reality"
     [ "$xhttp_enabled" = "true" ] && echo "  ✓ VLESS-XHTTP-H2/H3-TLS"
     [ "$grpc_enabled" = "true" ] && echo "  ✓ VLESS-gRPC-TLS"
-    [ "$trojan_enabled" = "true" ] && echo "  ✓ Trojan-TCP-TLS"
+    [ "$warp_enabled" = "true" ] && echo "  ✓ WARP SOCKS5 Outbound"
     
     echo ""
     echo "Useful Commands:"
@@ -462,12 +452,10 @@ check_only() {
     # Display what would be deployed
     echo ""
     echo "Deployment Preview:"
-    echo "  Reality:     $(echo "$CONFIG_JSON" | jq -r '.protocols.reality.enabled')"
-    echo "  XHTTP:       $(echo "$CONFIG_JSON" | jq -r '.protocols.xhttp.enabled')"
-    echo "  gRPC:        $(echo "$CONFIG_JSON" | jq -r '.protocols.grpc.enabled')"
-    echo "  Trojan:      $(echo "$CONFIG_JSON" | jq -r '.protocols.trojan.enabled')"
-    echo "  HAProxy:     $(echo "$CONFIG_JSON" | jq -r '.haproxy.enabled')"
-    echo "  WARP:        $(echo "$CONFIG_JSON" | jq -r '.warp_outbound.enabled')"
+    echo "  XHTTP:       $(echo "$CONFIG_JSON" | jq -r '.protocols.xhttp.enabled // true')"
+    echo "  gRPC:        $(echo "$CONFIG_JSON" | jq -r '.protocols.grpc.enabled // true')"
+    echo "  HAProxy:     $(echo "$CONFIG_JSON" | jq -r '.haproxy.enabled // true')"
+    echo "  WARP:        $(echo "$CONFIG_JSON" | jq -r '.warp_outbound.enabled // false')"
     echo "  code-server: $(echo "$CONFIG_JSON" | jq -r '.code_server.enabled // false')"
     echo ""
 }

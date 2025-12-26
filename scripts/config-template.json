@@ -4,46 +4,20 @@
     "region": "Singapore"
   },
   "domains": {
-    "reality": null,
     "wildcard_base": "proxy.example.com",
     "cdn_domain": "cdn.example.com",
     "subscription": "sub.example.com"
   },
-  "uuids": {
-    "vless_reality": "auto-generate",
-    "vless_xhttp": "auto-generate",
-    "vless_grpc": "auto-generate",
-    "trojan_password": "auto-generate"
-  },
   "protocols": {
-    "reality": {
-      "enabled": true,
-      "port": 9443,
-      "dest": "www.microsoft.com:443",
-      "server_names": [
-        "www.microsoft.com",
-        "www.bing.com"
-      ]
-    },
     "xhttp": {
-      "enabled": true,
-      "port": 8443,
-      "cdn_compatible": true
+      "enabled": true
     },
     "grpc": {
-      "enabled": true,
-      "port": 2083,
-      "cdn_compatible": true
-    },
-    "trojan": {
-      "enabled": false,
-      "port": 2087
+      "enabled": true
     }
   },
   "haproxy": {
     "enabled": true,
-    "frontend_port": 443,
-    "stats_port": 2053,
     "stats_user": "admin",
     "stats_password": "auto-generate"
   },
@@ -57,7 +31,8 @@
   },
   "warp_outbound": {
     "enabled": false,
-    "license_key": null,
+    "socks_address": "127.0.0.1",
+    "socks_port": 25344,
     "routing_mode": "selective",
     "route_domains": [
       "geosite:netflix",
@@ -65,19 +40,20 @@
       "geosite:hbo",
       "geosite:spotify"
     ],
-    "route_ips": [],
     "block_bt": true
+  },
+  "proton_outbound": {
+    "enabled": false,
+    "socks_address": "127.0.0.1",
+    "socks_port": 25345
   },
   "subscription": {
     "enabled": true,
-    "nginx_port": 2096,
     "login_user": "admin",
     "login_password": "auto-generate"
   },
   "code_server": {
     "enabled": false,
-    "port": 18443,
-    "password": "auto-generate",
-    "install_extensions": false
+    "password": "auto-generate"
   }
 }

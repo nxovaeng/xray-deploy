@@ -19,8 +19,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# Default port (internal, HAProxy handles external)
-CODE_SERVER_PORT="${CODE_SERVER_PORT:-8443}"
+# Port is read from autoconf.env (PORT_CODE_SERVER)
 CODE_SERVER_BIND="127.0.0.1"
 
 # Install code-server
@@ -193,7 +192,9 @@ setup_code_server() {
     fi
     
     install_exts=$(echo "$config_json" | jq -r '.code_server.install_extensions // false')
-    port=$(echo "$config_json" | jq -r '.code_server.port // 8443')
+    
+    # Port is read from autoconf.env
+    local port="${PORT_CODE_SERVER:-45443}"
     
     # Read from autoconf.env (single source of truth)
     local password="${CODE_SERVER_PASSWORD:-}"

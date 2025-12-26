@@ -92,85 +92,71 @@ generate_subscription_content() {
     
     echo -e "${YELLOW}Generating subscription content...${NC}"
     
-    # Read UUIDs and credentials from autoconf.env only (single source of truth)
-    local reality_uuid="${UUID_REALITY:-}"
+    # Read server name from config for link name prefix
+    local server_name=$(echo "$config_json" | jq -r '.server_info.name // "server"')
+    
+    # Read UUIDs from autoconf.env only (single source of truth)
     local xhttp_uuid="${UUID_XHTTP:-}"
     local grpc_uuid="${UUID_GRPC:-}"
-    local trojan_password="${TROJAN_PASSWORD:-}"
-    local reality_pubkey="${REALITY_PUBLIC_KEY:-}"
-    local reality_short_id="${REALITY_SHORT_ID:-}"
-    
     
     # Read domains from autoconf.env or use CDN domain
     local cdn_domain=$(echo "$config_json" | jq -r '.domains.cdn_domain // null')
     local xhttp_domain="${DOMAIN_XHTTP:-${cdn_domain}}"
     local grpc_domain="${DOMAIN_GRPC:-${cdn_domain}}"
-    local trojan_domain="${DOMAIN_TROJAN:-${cdn_domain}}"
     
     # Fallback to example domains if CDN not configured
     [ -z "$xhttp_domain" ] || [ "$xhttp_domain" = "null" ] && xhttp_domain="xhttp.example.com"
     [ -z "$grpc_domain" ] || [ "$grpc_domain" = "null" ] && grpc_domain="grpc.example.com"
-    [ -z "$trojan_domain" ] || [ "$trojan_domain" = "null" ] && trojan_domain="trojan.example.com"
     
     # Generate share links
     local links=""
     
-    # Reality link
-    if [ -n "$reality_uuid" ] && [ -n "$reality_pubkey" ]; then
-        local reality_enabled=$(echo "$config_json" | jq -r '.protocols.reality.enabled')
-        if [ "$reality_enabled" = "true" ]; then
-            local reality_port=$(echo "$config_json" | jq -r '.protocols.reality.port')
-            local reality_sni=$(echo "$config_json" | jq -r '.protocols.reality.server_names[0]')
-            links+="vless://${reality_uuid}@${server_ip}:${reality_port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${reality_sni}&fp=chrome&pbk=${reality_pubkey}&sid=${reality_short_id}&type=tcp&headerType=none#Reality-Direct\n"
-        fi
-    fi
-    
     # XHTTP links (CDN-compatible: generate both CDN and Direct variants)
     if [ -n "$xhttp_uuid" ]; then
-        local xhttp_enabled=$(echo "$config_json" | jq -r '.protocols.xhttp.enabled')
+        local xhttp_enabled=$(echo "$config_json" | jq -r '.protocols.xhttp.enabled // true')
         if [ "$xhttp_enabled" = "true" ]; then
-            local xhttp_path="${XHTTP_PATH:-$(echo "$config_json" | jq -r '.protocols.xhttp.path')}"
-            local xhttp_cdn=$(echo "$config_json" | jq -r '.protocols.xhttp.cdn_compatible // false')
+            local xhttp_path="${XHTTP_PATH:-/api}"
             
             # Direct connection link (using random subdomain)
-            links+="vless://${xhttp_uuid}@${xhttp_domain}:443?encryption=none&security=tls&sni=${xhttp_domain}&fp=chrome&alpn=h2,http/1.1&type=xhttp&path=${xhttp_path}#XHTTP-Direct\n"
+            links+="vless://${xhttp_uuid}@${xhttp_domain}:443?encryption=none&security=tls&sni=${xhttp_domain}&fp=chrome&alpn=h2,http/1.1&type=xhttp&path=${xhttp_path}#${server_name}-XHTTP-Direct\n"
             
-            # CDN connection link (using cdn_domain if available and cdn_compatible)
-            if [ "$xhttp_cdn" = "true" ] && [ -n "$cdn_domain" ] && [ "$cdn_domain" != "null" ]; then
-                links+="vless://${xhttp_uuid}@${cdn_domain}:443?encryption=none&security=tls&sni=${xhttp_domain}&fp=chrome&alpn=h2,http/1.1&type=xhttp&path=${xhttp_path}&host=${xhttp_domain}#XHTTP-CDN\n"
+            # CDN connection link (using cdn_domain if available)
+            if [ -n "$cdn_domain" ] && [ "$cdn_domain" != "null" ]; then
+                links+="vless://${xhttp_uuid}@${cdn_domain}:443?encryption=none&security=tls&sni=${xhttp_domain}&fp=chrome&alpn=h2,http/1.1&type=xhttp&path=${xhttp_path}&host=${xhttp_domain}#${server_name}-XHTTP-CDN\n"
             fi
         fi
     fi
     
     # gRPC links (CDN-compatible: generate both CDN and Direct variants)
     if [ -n "$grpc_uuid" ]; then
-        local grpc_enabled=$(echo "$config_json" | jq -r '.protocols.grpc.enabled')
+        local grpc_enabled=$(echo "$config_json" | jq -r '.protocols.grpc.enabled // true')
         if [ "$grpc_enabled" = "true" ]; then
-            local grpc_service="${GRPC_SERVICE_NAME:-$(echo "$config_json" | jq -r '.protocols.grpc.service_name')}"
-            local grpc_cdn=$(echo "$config_json" | jq -r '.protocols.grpc.cdn_compatible // false')
+            local grpc_service="${GRPC_SERVICE_NAME:-GunService}"
             
             # Direct connection link
-            links+="vless://${grpc_uuid}@${grpc_domain}:443?encryption=none&security=tls&sni=${grpc_domain}&fp=chrome&alpn=h2&type=grpc&serviceName=${grpc_service}#gRPC-Direct\n"
+            links+="vless://${grpc_uuid}@${grpc_domain}:443?encryption=none&security=tls&sni=${grpc_domain}&fp=chrome&alpn=h2&type=grpc&serviceName=${grpc_service}#${server_name}-gRPC-Direct\n"
             
             # CDN connection link
-            if [ "$grpc_cdn" = "true" ] && [ -n "$cdn_domain" ] && [ "$cdn_domain" != "null" ]; then
-                links+="vless://${grpc_uuid}@${cdn_domain}:443?encryption=none&security=tls&sni=${grpc_domain}&fp=chrome&alpn=h2&type=grpc&serviceName=${grpc_service}&authority=${grpc_domain}#gRPC-CDN\n"
+            if [ -n "$cdn_domain" ] && [ "$cdn_domain" != "null" ]; then
+                links+="vless://${grpc_uuid}@${cdn_domain}:443?encryption=none&security=tls&sni=${grpc_domain}&fp=chrome&alpn=h2&type=grpc&serviceName=${grpc_service}&authority=${grpc_domain}#${server_name}-gRPC-CDN\n"
             fi
         fi
     fi
     
-    # Trojan links (generate both CDN and Direct variants)
-    if [ -n "$trojan_password" ]; then
-        local trojan_enabled=$(echo "$config_json" | jq -r '.protocols.trojan.enabled')
-        if [ "$trojan_enabled" = "true" ]; then
-            # Direct connection link
-            links+="trojan://${trojan_password}@${trojan_domain}:443?security=tls&sni=${trojan_domain}&fp=chrome&alpn=http/1.1&type=tcp#Trojan-Direct\n"
-            
-            # CDN connection link (if cdn_domain available)
-            if [ -n "$cdn_domain" ] && [ "$cdn_domain" != "null" ]; then
-                links+="trojan://${trojan_password}@${cdn_domain}:443?security=tls&sni=${trojan_domain}&fp=chrome&alpn=http/1.1&type=tcp&host=${trojan_domain}#Trojan-CDN\n"
-            fi
-        fi
+    # WARP XHTTP link (dedicated WARP outbound)
+    local warp_enabled=$(echo "$config_json" | jq -r '.warp_outbound.enabled // false')
+    local warp_domain="${DOMAIN_WARP:-}"
+    local warp_path="${WARP_PATH:-/warp}"
+    if [ "$warp_enabled" = "true" ] && [ -n "$warp_domain" ] && [ -n "$xhttp_uuid" ]; then
+        links+="vless://${xhttp_uuid}@${warp_domain}:443?encryption=none&security=tls&sni=${warp_domain}&fp=chrome&alpn=h2,http/1.1&type=xhttp&path=${warp_path}#${server_name}-XHTTP-WARP\n"
+    fi
+    
+    # Proton VPN XHTTP link (dedicated Proton outbound)
+    local proton_enabled=$(echo "$config_json" | jq -r '.proton_outbound.enabled // false')
+    local proton_domain="${DOMAIN_PROTON:-}"
+    local proton_path="${PROTON_PATH:-/proton}"
+    if [ "$proton_enabled" = "true" ] && [ -n "$proton_domain" ] && [ -n "$xhttp_uuid" ]; then
+        links+="vless://${xhttp_uuid}@${proton_domain}:443?encryption=none&security=tls&sni=${proton_domain}&fp=chrome&alpn=h2,http/1.1&type=xhttp&path=${proton_path}#${server_name}-XHTTP-Proton\n"
     fi
     
     # Save links
@@ -602,10 +588,11 @@ setup_subscription() {
     
     sub_enabled=$(echo "$config_json" | jq -r '.subscription.enabled // true')
     sub_domain="$SUBSCRIPTION_DOMAIN"
-    nginx_port=$(echo "$config_json" | jq -r '.subscription.nginx_port // 2096')
+    # Use PORT_NGINX and PORT_HAPROXY_STATS from autoconf.env
+    nginx_port="${PORT_NGINX:-44096}"
     login_user="$SUBSCRIPTION_USER"
     login_password="$SUBSCRIPTION_PASSWORD"
-    stats_port=$(echo "$config_json" | jq -r '.haproxy.stats_port // 2053')
+    stats_port="${PORT_HAPROXY_STATS:-46053}"
     
     if [ "$sub_enabled" != "true" ]; then
         echo -e "${YELLOW}Subscription is disabled in configuration${NC}"
