@@ -330,6 +330,63 @@ create_login_page() {
             background: #667eea;
             color: white;
         }
+        /* Proton VPN Management Panel */
+        .proton-section {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border-radius: 8px;
+            color: white;
+        }
+        .proton-section h2 {
+            color: #4fd1c5;
+            border-bottom-color: #4fd1c5;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .status-dot {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #666;
+        }
+        .status-dot.running { background: #48bb78; box-shadow: 0 0 8px #48bb78; }
+        .status-dot.stopped { background: #f56565; }
+        .proton-controls {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            margin-top: 0.5rem;
+        }
+        .proton-controls select {
+            flex: 1;
+            min-width: 120px;
+            padding: 0.5rem;
+            border-radius: 5px;
+            border: none;
+            font-size: 0.9rem;
+        }
+        .proton-controls button {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+        }
+        .switch-btn { background: #4fd1c5; color: #1a1a2e; }
+        .switch-btn:hover { background: #38b2ac; }
+        .start-btn { background: #48bb78; color: white; }
+        .start-btn:hover { background: #38a169; }
+        .stop-btn { background: #f56565; color: white; }
+        .stop-btn:hover { background: #e53e3e; }
+        .proton-current {
+            margin-top: 0.5rem;
+            font-size: 0.85rem;
+            color: #a0aec0;
+        }
     </style>
 </head>
 <body>
@@ -357,6 +414,19 @@ create_login_page() {
             <div id="custom-list-container">
                 <div class="loading">加载中...</div>
             </div>
+        </div>
+        
+        <div class="proton-section">
+            <h2>🚀 Proton VPN 管理 <span id="proton-status-dot" class="status-dot"></span></h2>
+            <div class="proton-controls">
+                <select id="proton-region">
+                    <option value="">加载中...</option>
+                </select>
+                <button class="switch-btn" onclick="switchProtonRegion()">切换</button>
+                <button class="start-btn" onclick="startProton()">启动</button>
+                <button class="stop-btn" onclick="stopProton()">停止</button>
+            </div>
+            <div id="proton-current" class="proton-current"></div>
         </div>
         
         <div class="note">
@@ -478,8 +548,117 @@ create_login_page() {
             return items;
         }
         
-        // Load custom subscriptions on page load
-        document.addEventListener('DOMContentLoaded', loadCustomSubscriptions);
+        // ========== Proton VPN Management ==========
+        async function loadProtonStatus() {
+            try {
+                const response = await fetch('/api/proton/status');
+                if (!response.ok) throw new Error('API not available');
+                const data = await response.json();
+                
+                const dot = document.getElementById('proton-status-dot');
+                const current = document.getElementById('proton-current');
+                
+                if (data.running) {
+                    dot.className = 'status-dot running';
+                    current.textContent = '状态: 运行中 | 当前地区: ' + (data.region || '未知').toUpperCase();
+                } else {
+                    dot.className = 'status-dot stopped';
+                    current.textContent = '状态: 已停止';
+                }
+            } catch (e) {
+                console.log('Proton API not available');
+                document.querySelector('.proton-section').style.display = 'none';
+            }
+        }
+        
+        async function loadProtonRegions() {
+            try {
+                const response = await fetch('/api/proton/regions');
+                if (!response.ok) throw new Error('Failed to load regions');
+                const data = await response.json();
+                
+                const select = document.getElementById('proton-region');
+                select.innerHTML = '';
+                
+                const regions = Object.keys(data.regions);
+                if (regions.length === 0) {
+                    select.innerHTML = '<option value="">无可用地区</option>';
+                    return;
+                }
+                
+                for (const region of regions) {
+                    const opt = document.createElement('option');
+                    opt.value = region;
+                    opt.textContent = data.regions[region].name;
+                    if (region === data.current) opt.selected = true;
+                    select.appendChild(opt);
+                }
+            } catch (e) {
+                console.error('Failed to load regions:', e);
+            }
+        }
+        
+        async function switchProtonRegion() {
+            const region = document.getElementById('proton-region').value;
+            if (!region) { alert('请选择地区'); return; }
+            
+            try {
+                const response = await fetch('/api/proton/switch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ region })
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('已切换到 ' + region.toUpperCase());
+                    loadProtonStatus();
+                } else {
+                    alert('切换失败: ' + (data.error || '未知错误'));
+                }
+            } catch (e) {
+                alert('切换失败: ' + e.message);
+            }
+        }
+        
+        async function startProton() {
+            try {
+                const response = await fetch('/api/proton/start', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('Proton VPN 已启动');
+                    loadProtonStatus();
+                } else {
+                    alert('启动失败: ' + (data.error || '未知错误'));
+                }
+            } catch (e) {
+                alert('启动失败: ' + e.message);
+            }
+        }
+        
+        async function stopProton() {
+            try {
+                const response = await fetch('/api/proton/stop', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('Proton VPN 已停止');
+                    loadProtonStatus();
+                } else {
+                    alert('停止失败: ' + (data.error || '未知错误'));
+                }
+            } catch (e) {
+                alert('停止失败: ' + e.message);
+            }
+        }
+        
+        // Load custom subscriptions and Proton status on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            loadCustomSubscriptions();
+            loadProtonStatus();
+            loadProtonRegions();
+        });
     </script>
 </body>
 </html>
@@ -552,6 +731,17 @@ server {
         alias /var/www/sub/custom/;
         autoindex on;  # Allow listing for easy management
         default_type text/plain;
+    }
+    
+    # Proton VPN Management API (requires authentication)
+    location /api/proton/ {
+        auth_basic "Admin Access";
+        auth_basic_user_file /etc/nginx/.htpasswd;
+        proxy_pass http://127.0.0.1:8081/api/proton/;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
     }
     
     # All other paths return 404

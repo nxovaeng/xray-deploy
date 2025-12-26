@@ -267,21 +267,6 @@ manage_certificates() {
     "$MODULES_DIR/cert-manager.sh" "$CONFIG_FILE" "$SERVER_IP"
 }
 
-# Setup WARP outbound
-setup_warp() {
-    local warp_enabled
-    warp_enabled=$(echo "$CONFIG_JSON" | jq -r '.warp_outbound.enabled')
-    
-    if [ "$warp_enabled" = "true" ]; then
-        log_info "Setting up Cloudflare WARP..."
-        if "$MODULES_DIR/warp-setup.sh" "$CONFIG_FILE"; then
-            log_success "WARP setup completed"
-        else
-            log_warn "WARP setup failed, continuing without WARP outbound"
-        fi
-    fi
-}
-
 # Generate subscription
 generate_subscription() {
     log_info "Generating subscription URLs..."
@@ -424,7 +409,6 @@ main_deploy() {
     
     # Optional features
     log_info "===== Optional Features ====="
-    setup_warp
     generate_subscription
     setup_code_server
     
@@ -501,7 +485,6 @@ update_deploy() {
     
     # Optional features
     log_info "===== Optional Features ====="
-    setup_warp
     generate_subscription
     setup_code_server
     

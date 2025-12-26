@@ -1,0 +1,15 @@
+[Unit]
+Description=Proton VPN Management API
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/proton-ctl
+ExecStart=/opt/proton-ctl/venv/bin/python proton_ctl.py
+Restart=on-failure
+RestartSec=5
+Environment=PROTON_CONFIG_DIR=/etc/wireproxy
+
+[Install]
+WantedBy=multi-user.target
