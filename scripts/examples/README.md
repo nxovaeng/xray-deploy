@@ -87,3 +87,12 @@ A       cdn.example.com            YOUR_VPS_IP  (可选)
 ## 更多信息
 
 参考项目根目录的 `config-template.json` 获取完整配置说明和注释。
+
+```
+# 启动服务
+systemctl start wireproxy
+# 开机自启
+systemctl enable wireproxy
+# 测试连接
+curl --proxy socks5h://127.0.0.1:25344 https://1.1.1.1/cdn-cgi/trace
+```

@@ -309,6 +309,10 @@ start_services() {
         return 1
     fi
     
+    # Wait for Xray to fully bind to ports before starting HAProxy
+    log_info "Waiting for Xray to bind to ports..."
+    sleep 3
+    
     # Start HAProxy if enabled
     local haproxy_enabled
     haproxy_enabled=$(echo "$CONFIG_JSON" | jq -r '.haproxy.enabled')

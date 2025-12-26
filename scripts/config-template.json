@@ -18,6 +18,7 @@
   },
   "haproxy": {
     "enabled": true,
+    "frontend_port": 443,
     "stats_user": "admin",
     "stats_password": "auto-generate"
   },

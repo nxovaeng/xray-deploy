@@ -265,39 +265,49 @@ create_routing_rules() {
     local routing_mode=${3:-selective}
     local block_bt=${4:-false}
     
-    local rules_json=""
+    # Build rules array
+    local rules=()
     
     # Proton XHTTP inbound → Proton outbound (1:1 direct binding)
     if [ "$proton_enabled" = "true" ]; then
-        rules_json+='{\n      "type": "field",\n      "inboundTag": ["proton-xhttp"],\n      "outboundTag": "proton"\n    },\n    '
+        rules+=('{"type":"field","inboundTag":["proton-xhttp"],"outboundTag":"proton"}')
     fi
     
     # WARP XHTTP inbound → WARP outbound (1:1 direct binding)
     if [ "$warp_enabled" = "true" ]; then
-        rules_json+='{\n      "type": "field",\n      "inboundTag": ["warp-xhttp"],\n      "outboundTag": "warp"\n    },\n    '
+        rules+=('{"type":"field","inboundTag":["warp-xhttp"],"outboundTag":"warp"}')
     fi
     
     # Blocking rules
-    rules_json+='{\n      "type": "field",\n      "ip": ["geoip:private"],\n      "outboundTag": "block"\n    },\n    {\n      "type": "field",\n      "domain": ["geosite:category-ads"],\n      "outboundTag": "block"\n    }'
+    rules+=('{"type":"field","ip":["geoip:private"],"outboundTag":"block"}')
+    rules+=('{"type":"field","domain":["geosite:category-ads"],"outboundTag":"block"}')
     
     # BT blocking
     if [ "$block_bt" = "true" ]; then
-        rules_json+=',\n    {\n      "type": "field",\n      "protocol": ["bittorrent"],\n      "outboundTag": "block"\n    }'
+        rules+=('{"type":"field","protocol":["bittorrent"],"outboundTag":"block"}')
     fi
     
     # WARP routing for selective mode
     if [ "$warp_enabled" = "true" ] && [ "$routing_mode" = "selective" ]; then
-        rules_json+=',\n    {\n      "type": "field",\n      "ip": ["geoip:cn"],\n      "outboundTag": "warp"\n    },\n    {\n      "type": "field",\n      "domain": ["geosite:cn"],\n      "outboundTag": "warp"\n    },\n    {\n      "type": "field",\n      "domain": ["geosite:netflix", "geosite:disney", "geosite:hbo", "geosite:spotify"],\n      "outboundTag": "warp"\n    }'
+        rules+=('{"type":"field","ip":["geoip:cn"],"outboundTag":"warp"}')
+        rules+=('{"type":"field","domain":["geosite:cn"],"outboundTag":"warp"}')
+        rules+=('{"type":"field","domain":["geosite:netflix","geosite:disney","geosite:hbo","geosite:spotify"],"outboundTag":"warp"}')
     fi
     
-    cat <<EOF
-{
-  "domainStrategy": "IPIfNonMatch",
-  "rules": [
-    $rules_json
-  ]
-}
-EOF
+    # Join rules with commas
+    local rules_json=""
+    local first=true
+    for rule in "${rules[@]}"; do
+        if [ "$first" = true ]; then
+            rules_json="$rule"
+            first=false
+        else
+            rules_json="$rules_json,$rule"
+        fi
+    done
+    
+    # Output formatted JSON
+    echo "{\"domainStrategy\":\"IPIfNonMatch\",\"rules\":[$rules_json]}"
 }
 
 # Generate complete Xray configuration
